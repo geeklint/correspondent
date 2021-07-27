@@ -1,7 +1,9 @@
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+mod application;
+mod nsd;
+mod socket;
+
+pub use self::{
+    application::{Application, CertificateResponse},
+    nsd::NsdManager,
+    socket::{Peer, PeerId},
+};

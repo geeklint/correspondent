@@ -19,13 +19,13 @@ pub trait Application: 'static + Send + Sync {
 
     fn sign_certificate(&self, csr_pem: &str) -> Self::SigningFuture;
 
-    const MAX_MESSAGE_SIZE: usize;
+    fn max_message_size() -> usize;
 
-    fn handle_message(&self, sender: PeerId<Self::Identity>, msg: Vec<u8>);
-    fn handle_new_peer(&self, id: PeerId<Self::Identity>, peer: &Peer);
-    fn handle_peer_gone(&self, peer: PeerId<Self::Identity>);
+    fn handle_message(&self, sender: &PeerId<Self::Identity>, msg: Vec<u8>);
+    fn handle_new_peer(&self, id: &PeerId<Self::Identity>, peer: &Peer);
+    fn handle_peer_gone(&self, peer: &PeerId<Self::Identity>);
 
-    const SERVICE_NAME: &'static str;
+    fn service_name() -> &'static str;
 }
 
 #[derive(Clone, Debug)]

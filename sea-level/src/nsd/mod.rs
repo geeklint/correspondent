@@ -16,7 +16,7 @@ mod platform;
 
 #[derive(Clone, Debug)]
 pub struct PeerEntry<T> {
-    pub player_id: T,
+    pub identity: T,
     pub port: u16,
     pub addresses: Vec<IpAddr>,
 }
@@ -42,11 +42,11 @@ impl<Plat> NsdManagerGeneric<Plat> {
         let new_peers = Arc::new(NewPeers::default());
         let proxy_peer_found = {
             let new_peers = Arc::clone(&new_peers);
-            move |player_id, host, ip, port| {
+            move |identity, host, ip, port| {
                 let new_peers = Arc::clone(&new_peers);
                 async move {
                     let mut guard = new_peers.found.lock().await;
-                    guard.entry((host, port, player_id)).or_default().push(ip);
+                    guard.entry((host, port, identity)).or_default().push(ip);
                     new_peers.notify.notify_one();
                 }
             }
@@ -56,7 +56,7 @@ impl<Plat> NsdManagerGeneric<Plat> {
             loop {
                 new_peers.notify.notified().await;
                 sleep(sleep_time).await;
-                for ((_host, port, player_id), mut addresses) in
+                for ((_host, port, identity), mut addresses) in
                     new_peers.found.lock().await.drain()
                 {
                     let socket = socket.clone();
@@ -64,7 +64,7 @@ impl<Plat> NsdManagerGeneric<Plat> {
                     tokio::spawn(async move {
                         let res = socket
                             .connect_local(PeerEntry {
-                                player_id,
+                                identity,
                                 port,
                                 addresses,
                             })
@@ -73,7 +73,7 @@ impl<Plat> NsdManagerGeneric<Plat> {
                             /*
                             eprintln!(
                                 "failed to connect to {}@(local):{}",
-                                player_id, port,
+                                identity, port,
                             );
                             */
                         }

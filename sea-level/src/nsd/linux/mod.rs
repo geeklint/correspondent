@@ -150,7 +150,7 @@ async fn create_service<App: crate::application::Application>(
         Some(IpAddr::V6(_)) => 1,
     };
     let flags = 0;
-    let mut name = Cow::Borrowed(App::SERVICE_NAME);
+    let mut name = Cow::Borrowed(App::service_name());
     let type_ = super::SERVICE_TYPE;
     let domain = "";
     let host = match bind_addr {
@@ -158,7 +158,7 @@ async fn create_service<App: crate::application::Application>(
         None => Cow::Borrowed(""),
     };
     loop {
-        let mut txt_line = b"identity=".to_vec();
+        let mut txt_line = b"id=".to_vec();
         txt_line.extend(App::identity_to_txt(&identity));
         let txt = vec![txt_line];
         match group
@@ -253,7 +253,7 @@ where
                         if let Ok(ip_addr) = address.parse::<IpAddr>() {
                             if let Some(identity) = txt
                                 .iter()
-                                .find_map(|line| line.strip_prefix(b"player="))
+                                .find_map(|line| line.strip_prefix(b"id="))
                                 .and_then(App::identity_from_txt)
                             {
                                 peer_found(identity, host, ip_addr, port)

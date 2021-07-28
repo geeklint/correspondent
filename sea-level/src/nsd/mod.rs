@@ -38,7 +38,6 @@ impl<Plat> NsdManagerGeneric<Plat> {
         } else {
             return Self { _plat: None };
         };
-        let identity = socket.identity().clone();
         let new_peers = Arc::new(NewPeers::default());
         let proxy_peer_found = {
             let new_peers = Arc::clone(&new_peers);
@@ -51,6 +50,7 @@ impl<Plat> NsdManagerGeneric<Plat> {
                 }
             }
         };
+        let app = socket.app().clone();
         let sleep_time = Duration::from_millis(100);
         let main = async move {
             loop {
@@ -83,7 +83,7 @@ impl<Plat> NsdManagerGeneric<Plat> {
         };
         Self {
             _plat: Plat::start(
-                identity,
+                app,
                 None, // TODO: handle non-wildcard?
                 port,
                 proxy_peer_found,
@@ -95,7 +95,7 @@ impl<Plat> NsdManagerGeneric<Plat> {
 
 pub trait Interface<App: crate::application::Application>: Sized {
     fn start<Found, FoundFut, Main>(
-        identity: App::Identity,
+        app: Arc<App>,
         bind_addr: Option<IpAddr>,
         port: u16,
         peer_found: Found,

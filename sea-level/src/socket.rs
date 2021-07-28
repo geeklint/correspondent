@@ -91,8 +91,8 @@ impl<App: Application> Socket<App> {
         self.endpoint.local_addr().ok().map(|addr| addr.port())
     }
 
-    pub fn identity(&self) -> &App::Identity {
-        self.app.identity()
+    pub(crate) fn app(&self) -> &Arc<App> {
+        &self.app
     }
 
     pub async fn connect(
@@ -100,7 +100,7 @@ impl<App: Application> Socket<App> {
         addr: SocketAddr,
         identity: App::Identity,
     ) -> Result<(), PeerNotConnected> {
-        let hostname = App::identity_to_dns(&identity);
+        let hostname = self.app.identity_to_dns(&identity);
         if let Ok(connecting) = self.endpoint.connect(&addr, &hostname) {
             Peer::start(
                 connecting,
@@ -215,7 +215,7 @@ impl Peer {
         let sending_hello = hello_timeout(async {
             let mut first_stream =
                 connection.open_uni().await.map_err(|_| PeerNotConnected)?;
-            let buf = App::identity_to_txt(&app.identity());
+            let buf = app.identity_to_txt(&app.identity());
             first_stream
                 .write_all(&buf)
                 .await
@@ -228,15 +228,14 @@ impl Peer {
                 _ => return Err(PeerNotConnected),
             };
             let buf = first_stream
-                .read_to_end(App::max_message_size())
+                .read_to_end(app.max_message_size())
                 .await
                 .map_err(|_| PeerNotConnected)?;
-            let hello =
-                App::identity_from_txt(&buf).ok_or(PeerNotConnected)?;
+            let hello = app.identity_from_txt(&buf).ok_or(PeerNotConnected)?;
             Ok(hello)
         });
         let ((), hello) = tokio::try_join!(sending_hello, recving_hello)?;
-        verify_peer::<App>(&connection, &hello).ok_or_else(|| {
+        verify_peer(&connection, &*app, &hello).ok_or_else(|| {
             println!("failed to verify peer");
             PeerNotConnected
         })?;
@@ -255,7 +254,7 @@ impl Peer {
             let peer_id = peer_id.clone();
             tokio::spawn(async move {
                 if let Ok(msg) =
-                    stream.read_to_end(App::max_message_size()).await
+                    stream.read_to_end(app.max_message_size()).await
                 {
                     app.handle_message(&peer_id, msg);
                 }
@@ -323,7 +322,7 @@ impl SocketCertificate {
         if let Some(cert) = Self::load(&data_dir).await? {
             return Ok(cert);
         }
-        let new = socket_certificate::<App>(app.identity());
+        let new = socket_certificate::<App>(app);
         let CertificateResponse {
             client_chain_pem,
             authority_pem,
@@ -424,10 +423,8 @@ fn configure_server(
     Ok(cfg_builder.build())
 }
 
-pub fn socket_certificate<App: Application>(
-    identity: &App::Identity,
-) -> rcgen::Certificate {
-    let hostname = App::identity_to_dns(identity);
+pub fn socket_certificate<App: Application>(app: &App) -> rcgen::Certificate {
+    let hostname = app.identity_to_dns(app.identity());
     let mut params = rcgen::CertificateParams::new([hostname]);
     let now = chrono::Utc::now();
     params.not_before = now;
@@ -441,12 +438,13 @@ struct PeerVerified;
 #[must_use]
 fn verify_peer<App: Application>(
     connection: &Connection,
+    app: &App,
     identity: &App::Identity,
 ) -> Option<PeerVerified> {
     let chain = connection.peer_identity()?;
     let cert = chain.iter().next()?;
     let pki_cert = webpki::EndEntityCert::from(cert.as_ref()).ok()?;
-    let hostname = App::identity_to_dns(identity);
+    let hostname = app.identity_to_dns(identity);
     let pki_name = webpki::DNSNameRef::try_from_ascii_str(&hostname).unwrap();
     pki_cert.verify_is_valid_for_dns_name(pki_name).ok()?;
     Some(PeerVerified)

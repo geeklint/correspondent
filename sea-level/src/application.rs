@@ -8,9 +8,9 @@ pub trait Application: 'static + Send + Sync {
     type Identity: 'static + Clone + Hash + Ord + Send + Sync;
 
     fn identity(&self) -> &Self::Identity;
-    fn identity_to_dns(id: &Self::Identity) -> String;
-    fn identity_to_txt(id: &Self::Identity) -> Vec<u8>;
-    fn identity_from_txt(txt: &[u8]) -> Option<Self::Identity>;
+    fn identity_to_dns(&self, id: &Self::Identity) -> String;
+    fn identity_to_txt(&self, id: &Self::Identity) -> Vec<u8>;
+    fn identity_from_txt(&self, txt: &[u8]) -> Option<Self::Identity>;
 
     type SigningError: Error;
     type SigningFuture: Future<
@@ -19,13 +19,13 @@ pub trait Application: 'static + Send + Sync {
 
     fn sign_certificate(&self, csr_pem: &str) -> Self::SigningFuture;
 
-    fn max_message_size() -> usize;
+    fn max_message_size(&self) -> usize;
 
     fn handle_message(&self, sender: &PeerId<Self::Identity>, msg: Vec<u8>);
     fn handle_new_peer(&self, id: &PeerId<Self::Identity>, peer: &Peer);
     fn handle_peer_gone(&self, peer: &PeerId<Self::Identity>);
 
-    fn service_name() -> &'static str;
+    fn service_name(&self) -> &'static str;
 }
 
 #[derive(Clone, Debug)]

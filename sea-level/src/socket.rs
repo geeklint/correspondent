@@ -15,6 +15,7 @@ use {
 
 use crate::{
     application::{Application, CertificateResponse},
+    nsd::NsdManager,
     util::{send_buf, ConnectionSet},
 };
 
@@ -24,21 +25,22 @@ pub struct PeerId<T>(pub T, usize);
 type PeerList<T> = Arc<Mutex<ConnectionSet<T>>>;
 type ActiveConnections = Arc<Mutex<HashSet<ConnectionIdentity>>>;
 
-#[derive(Debug)]
 pub struct Socket<App: Application> {
     app: Arc<App>,
     endpoint: Endpoint,
     peers: PeerList<App::Identity>,
     active_connections: ActiveConnections,
+    nsd_manager: Arc<NsdManager>,
 }
 
 impl<App: Application> Clone for Socket<App> {
     fn clone(&self) -> Self {
         Self {
-            app: self.app.clone(),
+            app: Arc::clone(&self.app),
             endpoint: self.endpoint.clone(),
-            peers: self.peers.clone(),
-            active_connections: self.active_connections.clone(),
+            peers: Arc::clone(&self.peers),
+            active_connections: Arc::clone(&self.active_connections),
+            nsd_manager: Arc::clone(&self.nsd_manager),
         }
     }
 }
@@ -79,11 +81,20 @@ impl<App: Application> Socket<App> {
                 ));
             }
         });
-        Ok(Self {
+        let temp = Self {
             app,
             endpoint,
             peers,
             active_connections,
+            // pass an empty nsd mananger into the nsd mananger, so
+            // as to avoid circular references
+            nsd_manager: Arc::new(NsdManager::empty()),
+        };
+        let nsd_manager = Arc::new(NsdManager::new(temp.clone()));
+        // return a version with a real NsdManager
+        Ok(Self {
+            nsd_manager,
+            ..temp
         })
     }
 

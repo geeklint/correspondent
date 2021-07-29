@@ -5,6 +5,5 @@ mod util;
 
 pub use self::{
     application::{Application, CertificateResponse},
-    nsd::NsdManager,
-    socket::{Peer, PeerId},
+    socket::{Peer, PeerId, Socket},
 };

@@ -23,11 +23,16 @@ pub struct PeerEntry<T> {
 
 pub type NsdManager = NsdManagerGeneric<platform::NsdManager>;
 
+#[derive(Debug)]
 pub struct NsdManagerGeneric<Plat> {
     _plat: Option<Plat>,
 }
 
 impl<Plat> NsdManagerGeneric<Plat> {
+    pub fn empty() -> Self {
+        Self { _plat: None }
+    }
+
     pub fn new<App>(socket: crate::socket::Socket<App>) -> Self
     where
         App: crate::application::Application,

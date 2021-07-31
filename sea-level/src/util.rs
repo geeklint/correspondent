@@ -113,36 +113,6 @@ impl<K: Ord> Ord for ConnectionEntry<K> {
     }
 }
 
-pub async fn read_to_end_into<S: quinn::crypto::Session>(
-    mut stream: quinn::generic::RecvStream<S>,
-    buf: &mut [u8],
-) -> Result<usize, quinn::ReadError> {
-    let mut start = u64::MAX;
-    let mut end = 0;
-    let max_size = buf.len() as u64;
-    while let Some(chunk) = stream.read_chunk(usize::MAX, false).await? {
-        if start == u64::MAX {
-            start = chunk.offset;
-        } else if chunk.offset < start {
-            let red = (end - start) as usize;
-            let push = (start - chunk.offset) as usize;
-            if (push + red) as u64 > max_size {
-                return Err(quinn::ReadError::UnknownStream);
-            }
-            buf.copy_within(0..red, push as usize);
-            start = chunk.offset;
-        }
-        let chunk_end = chunk.bytes.len() as u64 + chunk.offset;
-        if chunk_end - start > max_size {
-            return Err(quinn::ReadError::UnknownStream);
-        }
-        let offset = (chunk.offset - start) as usize;
-        buf[offset..offset + chunk.bytes.len()].copy_from_slice(&chunk.bytes);
-        end = end.max(chunk_end);
-    }
-    Ok((end - start) as usize)
-}
-
 pub async fn send_buf<'a, S: 'a + quinn::crypto::Session>(
     conn: quinn::generic::Connection<S>,
     buf: &'a [u8],

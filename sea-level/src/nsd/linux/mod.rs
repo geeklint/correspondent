@@ -63,15 +63,14 @@ where
         let (resource, resource_handle) = resource.remote_handle();
 
         tokio::spawn(async move {
-            let _err = resource.await;
-            //eprintln!("lost connection to dbus! {:?}", err);
+            resource.await;
         });
 
         let proxy = Proxy::new(
             "org.freedesktop.Avahi",
             "/",
             Duration::from_secs(5),
-            conn.clone(),
+            Arc::clone(&conn),
         );
         tokio::spawn({
             async move {
@@ -124,7 +123,7 @@ impl NsdManager {
         }
         */
         main.await;
-        std::mem::drop((serving, browsing))
+        std::mem::drop((serving, browsing));
     }
 }
 
@@ -220,7 +219,7 @@ where
     let peer_found = Arc::new(peer_found);
     Ok(proxy.connection.add_match(rule).await?.cb(
         move |_msg, item_new: ItemNew| {
-            let app = app.clone();
+            let app = Arc::clone(&app);
             let proxy = proxy2.clone();
             let peer_found = Arc::clone(&peer_found);
             tokio::spawn(async move {

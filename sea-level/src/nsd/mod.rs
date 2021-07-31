@@ -55,7 +55,7 @@ impl<Plat> NsdManagerGeneric<Plat> {
                 }
             }
         };
-        let app = socket.app().clone();
+        let app = Arc::clone(socket.app());
         let sleep_time = Duration::from_millis(100);
         let main = async move {
             loop {

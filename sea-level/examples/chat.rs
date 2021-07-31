@@ -72,7 +72,7 @@ impl sea_level::Application for Application {
 
     fn sign_certificate(&self, csr_pem: &str) -> Self::SigningFuture {
         std::future::ready((|| {
-            let csr = rcgen::CertificateSigningRequest::from_pem(&csr_pem)?;
+            let csr = rcgen::CertificateSigningRequest::from_pem(csr_pem)?;
             let client_chain_pem =
                 csr.serialize_pem_with_signer(&self.ca_cert)?;
             Ok(CertificateResponse {

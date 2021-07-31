@@ -63,8 +63,8 @@ where
         let (resource, resource_handle) = resource.remote_handle();
 
         tokio::spawn(async move {
-            let err = resource.await;
-            eprintln!("lost connection to dbus! {:?}", err);
+            let _err = resource.await;
+            //eprintln!("lost connection to dbus! {:?}", err);
         });
 
         let proxy = Proxy::new(
@@ -103,23 +103,26 @@ impl NsdManager {
         Main: 'static + Send + Sync + Future<Output = ()>,
     {
         match proxy.get_version_string().await {
-            Ok(version) => println!("avahi version: {}", version),
+            Ok(_version) => (), //println!("avahi version: {}", version),
             Err(_) => {
-                println!("failed to get avahi version");
                 return;
             }
         }
         let serving = create_service(&*app, &proxy, port, bind_addr).await;
+        /*
         match &serving {
             Ok(_) => println!("registered service with avahi"),
             Err(err) => eprintln!("failed to create service: {}", err),
         }
+        */
         let browsing =
             browse_services(app, &proxy, bind_addr, peer_found).await;
+        /*
         match &browsing {
             Ok(_) => println!("started browsing for avahi services"),
             Err(err) => eprintln!("failed to start browsing: {}", err),
         }
+        */
         main.await;
         std::mem::drop((serving, browsing))
     }

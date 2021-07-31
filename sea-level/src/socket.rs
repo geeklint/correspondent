@@ -86,8 +86,8 @@ impl<App: Application> Socket<App> {
             endpoint,
             peers,
             active_connections,
-            // pass an empty nsd mananger into the nsd mananger, so
-            // as to avoid circular references
+            // pass a socket with an empty nsd mananger into the nsd mananger,
+            // so as to avoid circular references
             nsd_manager: Arc::new(NsdManager::empty()),
         };
         let nsd_manager = Arc::new(NsdManager::new(temp.clone()));
@@ -191,15 +191,11 @@ impl Peer {
         peer_list: PeerList<App::Identity>,
         active_connections: ActiveConnections,
     ) -> Result<(), PeerNotConnected> {
-        println!("Peer::start");
         let NewConnection {
             connection,
             mut uni_streams,
             ..
-        } = connecting.await.map_err(|e| {
-            eprintln!("connecting failed: {}", e);
-            PeerNotConnected
-        })?;
+        } = connecting.await.map_err(|e| PeerNotConnected)?;
         if !active_connections
             .lock()
             .await
@@ -208,10 +204,6 @@ impl Peer {
             // this might be vulnerable to a race condition where peers resolve
             // connections in the opposite order and both get closed, but idk
             // if that will happen often enough in practice to matter
-            println!(concat!(
-                "cancelling connection: already have a connection",
-                " with the same identity",
-            ));
             return Ok(());
         }
         let peer_port = connection.remote_address().port();
@@ -246,10 +238,8 @@ impl Peer {
             Ok(hello)
         });
         let ((), hello) = tokio::try_join!(sending_hello, recving_hello)?;
-        verify_peer(&connection, &*app, &hello).ok_or_else(|| {
-            println!("failed to verify peer");
-            PeerNotConnected
-        })?;
+        verify_peer(&connection, &*app, &hello)
+            .ok_or_else(|| PeerNotConnected)?;
         let peer_id = PeerId(hello.clone(), connection.stable_id());
         let peer = Self {
             conn: connection.clone(),
@@ -260,7 +250,6 @@ impl Peer {
             .await
             .insert(hello.clone(), connection.clone());
         while let Some(Ok(stream)) = uni_streams.next().await {
-            println!("message stream recieved");
             let app = Arc::clone(&app);
             let peer_id = peer_id.clone();
             tokio::spawn(async move {
@@ -277,9 +266,8 @@ impl Peer {
             .await
             .remove(&ConnectionIdentity(connection.clone()))
         {
-            eprintln!("failed to remove connection from active_connections");
+            //eprintln!("failed to remove connection from active_connections");
         }
-        println!("disconnected from {}", peer_port);
         app.handle_peer_gone(&peer_id);
         std::mem::drop(connection);
         Ok(())

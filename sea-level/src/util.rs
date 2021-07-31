@@ -150,7 +150,7 @@ pub async fn send_buf<'a, S: 'a + quinn::crypto::Session>(
     if let Ok(mut stream) = conn.open_uni().await {
         let _ = stream.write_all(buf).await;
     } else {
-        println!("failed to open stream!");
+        //println!("failed to open stream!");
     }
 }
 

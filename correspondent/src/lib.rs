@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: (Apache-2.0 OR MIT OR Zlib) */
+/* Copyright © 2021 Violet Leonard */
+
 //! # Overview
 //!
 //! correspondent is a high-level networking library which facilitates a

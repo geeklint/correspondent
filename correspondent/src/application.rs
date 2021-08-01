@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: (Apache-2.0 OR MIT OR Zlib) */
+/* Copyright © 2021 Violet Leonard */
+
 use std::{error::Error, future::Future, hash::Hash, path::PathBuf};
 
 use crate::socket::{Peer, PeerId};

@@ -2,6 +2,12 @@
 name = "correspondent"
 version = "0.1.0"
 edition = "2018"
+description = "non-hierarchical networking library"
+homepage = "https://github.com/geeklint/correspondent"
+repository = "https://github.com/geeklint/correspondent"
+readme = "README.md"
+keywords = ["network-programming"]
+license = "Apache-2.0 OR MIT OR Zlib"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

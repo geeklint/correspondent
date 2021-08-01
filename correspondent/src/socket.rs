@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: (Apache-2.0 OR MIT OR Zlib) */
+/* Copyright © 2021 Violet Leonard */
+
 use std::{
     collections::HashSet, error::Error, future::Future, net::SocketAddr,
     path::Path, sync::Arc, time::Duration,

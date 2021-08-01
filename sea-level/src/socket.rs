@@ -109,7 +109,8 @@ impl<App: Application> Socket<App> {
         self.endpoint.local_addr().ok().map(|addr| addr.port())
     }
 
-    pub(crate) fn app(&self) -> &Arc<App> {
+    /// Get a reference to the application stored in this socket
+    pub fn app(&self) -> &Arc<App> {
         &self.app
     }
 
@@ -329,6 +330,7 @@ impl SocketCertificate {
         app: &App,
     ) -> Result<Self, Box<dyn Error>> {
         let mut data_dir = app.application_data_dir();
+        std::fs::create_dir_all(&data_dir)?;
         data_dir.push("instance-certificate");
         if let Some(cert) = Self::load(&data_dir).await? {
             return Ok(cert);

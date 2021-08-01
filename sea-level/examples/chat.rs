@@ -1,14 +1,24 @@
+//! This example demonstrates using sea-level to create a basic LAN chat
+//! application.
+//!
+//! To try out it out, run multiple instances of this example.
+//! The instances should automatically connect, and entering a message on one
+//! will cause it to appear on the other(s).
+//!
+//! The example uses process ids as identity values.
+
 use std::{future::Ready, io::Write, path::PathBuf, sync::Arc};
 
 use sea_level::{CertificateResponse, Peer, PeerId, Socket};
 
-// These certificates are publically available, and should not be used for
+// These certificates are publicly available, and should not be used for
 // real applications
 const CA_CERT: &str = include_str!("debug-cert.pem");
 const CA_KEY_PK8: &[u8] = include_bytes!("debug-cert.pk8");
 
 #[tokio::main]
 async fn main() {
+    // create the signing certificate from the debug-cert files
     let ca_key = rcgen::KeyPair::from_der(CA_KEY_PK8).unwrap();
     let params =
         rcgen::CertificateParams::from_ca_cert_pem(CA_CERT, ca_key).unwrap();
@@ -24,12 +34,10 @@ async fn main() {
         use std::io::BufRead;
         let stdin = std::io::stdin();
         let mut lines = stdin.lock().lines();
-        print!("{}: ", process_id);
-        let _ = std::io::stdout().flush();
+        socket.app().show_prompt();
         while let Some(Ok(line)) = lines.next() {
             socket.send_to_all(line.into_bytes());
-            print!("{}: ", process_id);
-            let _ = std::io::stdout().flush();
+            socket.app().show_prompt();
         }
         println!();
     })
@@ -40,6 +48,13 @@ async fn main() {
 pub struct Application {
     process_id: u32,
     ca_cert: rcgen::Certificate,
+}
+
+impl Application {
+    fn show_prompt(&self) {
+        print!("{}: ", self.process_id);
+        let _ = std::io::stdout().flush();
+    }
 }
 
 impl sea_level::Application for Application {
@@ -88,18 +103,18 @@ impl sea_level::Application for Application {
 
     fn handle_message(&self, sender: &PeerId<Self::Identity>, msg: Vec<u8>) {
         let text = String::from_utf8_lossy(&msg);
-        print!("\r{}: {}\n{}: ", sender.0, &*text, self.process_id);
-        let _ = std::io::stdout().flush();
+        println!("\r{}: {}", sender.0, &*text);
+        self.show_prompt();
     }
 
     fn handle_new_peer(&self, id: &PeerId<Self::Identity>, _peer: &Peer) {
-        print!("\r{} joined.\n{}: ", id.0, self.process_id);
-        let _ = std::io::stdout().flush();
+        println!("\r{} joined.", id.0);
+        self.show_prompt();
     }
 
     fn handle_peer_gone(&self, id: &PeerId<Self::Identity>) {
-        print!("\r{} left.\n{}: ", id.0, self.process_id);
-        let _ = std::io::stdout().flush();
+        print!("\r{} left.", id.0);
+        self.show_prompt();
     }
 
     fn service_name(&self) -> &'static str {

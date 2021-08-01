@@ -2,15 +2,15 @@ use std::{error::Error, future::Future, hash::Hash, path::PathBuf};
 
 use crate::socket::{Peer, PeerId};
 
-/// The Application trait is the primary way to configure a sea-level socket,
-/// and respond to network events.
+/// The Application trait is the primary way to configure a correspondent
+/// socket, and respond to network events.
 ///
-/// There are two big things an application must define: an "identity" and a
-/// method for signing TLS certificates.
+/// There are two important things an application must define: an "identity"
+/// and a method for signing TLS certificates.
 ///
 /// The identity is used to communicate with other peers who you are.
-/// sea-level does not assume identities are unique - the PeerId type passed
-/// into the event handlers may contain the same identity without itself
+/// `Correspondent` does not assume identities are unique - the PeerId type
+/// passed into the event handlers may contain the same identity without itself
 /// comparing equal.  Suggested choices for Identity include:
 ///
 /// * `()` - in the case that all peers are the same, you can use the unit type
@@ -31,7 +31,7 @@ use crate::socket::{Peer, PeerId};
 /// demonstrate this approach).  Another alternative is to have
 /// a 3rd party server which authenticates clients and signs the certificates.
 pub trait Application: 'static + Send + Sync {
-    /// Provide a location for sea-level to store some information, notably
+    /// Provide a location for correspondent to store some information, notably
     /// offline copies of signed certificates.
     fn application_data_dir(&self) -> PathBuf;
 

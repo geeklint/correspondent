@@ -1,4 +1,4 @@
-//! This example demonstrates using sea-level to create a basic LAN chat
+//! This example demonstrates using correspondent to create a basic LAN chat
 //! application.
 //!
 //! To try out it out, run multiple instances of this example.
@@ -9,7 +9,7 @@
 
 use std::{future::Ready, io::Write, path::PathBuf, sync::Arc};
 
-use sea_level::{CertificateResponse, Peer, PeerId, Socket};
+use correspondent::{CertificateResponse, Peer, PeerId, Socket};
 
 // These certificates are publicly available, and should not be used for
 // real applications
@@ -57,7 +57,7 @@ impl Application {
     }
 }
 
-impl sea_level::Application for Application {
+impl correspondent::Application for Application {
     fn application_data_dir(&self) -> PathBuf {
         let mut path = PathBuf::from(file!());
         path.set_file_name("data-dir");
@@ -118,6 +118,6 @@ impl sea_level::Application for Application {
     }
 
     fn service_name(&self) -> &'static str {
-        "Sea Level Example Service"
+        "Correspondent Example Service"
     }
 }

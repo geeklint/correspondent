@@ -49,7 +49,7 @@ where
 fn create_service<App: crate::application::Application>(
     app: &App,
     port: u16,
-    bind_addr: Option<IpAddr>,
+    _bind_addr: Option<IpAddr>,
 ) {
     use bindings::Windows::Win32::Foundation::PWSTR;
     fn to_windows_str_boxen<'a>(
@@ -68,33 +68,15 @@ fn create_service<App: crate::application::Application>(
 
     let service_name =
         format!("{}.{}.local", app.service_name(), super::SERVICE_TYPE);
+    let mut hostname =
+        gethostname::gethostname().to_string_lossy().into_owned();
+    hostname.push_str(".local");
 
     let id_value = app.identity_to_txt(app.identity());
     let id_value = if let Ok(s) = std::str::from_utf8(&id_value) {
         s
     } else {
         return;
-    };
-    let (mut ip4_addr, mut ip6_addr) = match bind_addr {
-        None => (0_u32, unsafe { std::mem::zeroed() }),
-        Some(IpAddr::V4(addr)) => {
-            let ip4 = u32::from_be_bytes(addr.octets());
-            let ip6 = unsafe {
-                let mut val: Dns::IP6_ADDRESS = std::mem::zeroed();
-                val.IP6Word = [0, 0, 0, 0, 0, 0, 0, 1];
-                val
-            };
-            (ip4, ip6)
-        }
-        Some(IpAddr::V6(addr)) => {
-            let ip4 = 0x7F_00_00_01;
-            let ip6 = unsafe {
-                let mut val: Dns::IP6_ADDRESS = std::mem::zeroed();
-                val.IP6Word = addr.segments();
-                val
-            };
-            (ip4, ip6)
-        }
     };
     let txt_pairs = [("id", id_value)];
     let mut owned_keys = to_windows_str_boxen(txt_pairs.iter().map(|p| p.0));
@@ -106,11 +88,11 @@ fn create_service<App: crate::application::Application>(
         // service name
         service_name,
         // host name
-        "",
+        hostname,
         // ipv4
-        &mut ip4_addr as *mut _,
+        std::ptr::null_mut(),
         // ipv6
-        &mut ip6_addr as *mut _,
+        std::ptr::null_mut(),
         // port
         port,
         // priority
@@ -146,7 +128,7 @@ fn create_service<App: crate::application::Application>(
         Dns::DnsServiceRegister(&mut request as *mut _, std::ptr::null_mut())
     };
     if retcode != 9506 {
-        return;
+        // failed
     }
 }
 
@@ -203,12 +185,9 @@ unsafe extern "system" fn service_register_complete(
     instance: *mut Dns::DNS_SERVICE_INSTANCE,
 ) {
     let _service = ServiceInstance { ptr: instance };
-    /*
     if status != 0 {
-        eprintln!("failed to register; err = {}", status);
-    } else {
+        //eprintln!("failed to register; err = {}", status);
     }
-    */
 }
 
 unsafe extern "system" fn service_browse_callback(
@@ -284,15 +263,12 @@ where
     FoundFut: Send + Sync + Future<Output = ()>,
 {
     unsafe fn do_spawn(self: Arc<Self>, instance: &Dns::DNS_SERVICE_INSTANCE) {
-        let mut ipv4 = (!instance.ip4Address.is_null()).then(|| {
+        let ipv4 = (!instance.ip4Address.is_null()).then(|| {
             IpAddr::V4(Ipv4Addr::from((*instance.ip4Address).to_be()))
         });
-        let ipv6 = (!instance.ip6Address.is_null()).then(|| {
+        let _ipv6 = (!instance.ip6Address.is_null()).then(|| {
             IpAddr::V6(Ipv6Addr::from((*instance.ip6Address).IP6Byte))
         });
-        if ipv4.is_none() && ipv6.is_none() {
-            ipv4 = Some(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
-        }
         if instance.pszHostName.is_null() {
             return;
         }
@@ -319,8 +295,6 @@ where
         };
         // no ipv6 on Windows because of dual-stack things
         if let Some(ip_addr) = ipv4 {
-            let identity = identity.clone();
-            let host = host.clone();
             let ctx = Arc::clone(&self);
             self.handle.spawn(async move {
                 (ctx.peer_found)(identity, host, ip_addr, port).await;

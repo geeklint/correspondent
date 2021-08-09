@@ -27,5 +27,3 @@ dbus-tokio = "0.7"
 
 [target.'cfg(windows)'.dependencies]
 windows = "0.18.0"
-[target.'cfg(windows)'.build-dependencies]
-windows = "0.18.0"

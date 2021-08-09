@@ -69,11 +69,13 @@ impl<App: Application> Socket<App> {
         let server_cfg = configure_server(&certificate)?;
         let mut builder = Endpoint::builder();
         builder.default_client_config(client_cfg).listen(server_cfg);
-        let (endpoint, incoming) = builder.bind(
-            &"[::]:0"
-                .parse()
-                .expect("Failed to parse known valid SockAddr"),
-        )?;
+        let bind_addr = if cfg!(windows) {
+            "0.0.0.0:0".parse()
+        } else {
+            "[::]:0".parse()
+        };
+        let (endpoint, incoming) = builder
+            .bind(&bind_addr.expect("Failed to parse known valid SockAddr"))?;
         let app2 = Arc::clone(&app);
         let peers = PeerList::default();
         let peers2 = Arc::clone(&peers);

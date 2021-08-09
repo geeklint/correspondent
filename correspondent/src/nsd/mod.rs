@@ -80,8 +80,8 @@ impl<Plat> NsdManagerGeneric<Plat> {
                         if res.is_err() {
                             /*
                             eprintln!(
-                                "failed to connect to {}@(local):{}",
-                                identity, port,
+                                "failed to connect to {}:{}",
+                                host, port,
                             );
                             */
                         }

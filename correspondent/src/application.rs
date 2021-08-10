@@ -48,7 +48,7 @@ pub trait Application: 'static + Send + Sync {
     fn max_message_size(&self) -> usize;
 
     /// The name of the DNS-SD service to use.
-    fn service_name(&self) -> &'static str;
+    fn service_name(&self) -> String;
 
     /// The identity type.  See trait documentation for more information.
     type Identity: 'static + Clone + Hash + Ord + Send + Sync;

@@ -120,7 +120,7 @@ impl correspondent::Application for Application {
         self.show_prompt();
     }
 
-    fn service_name(&self) -> &'static str {
-        "Correspondent Example Service"
+    fn service_name(&self) -> String {
+        "Correspondent Example Service".to_string()
     }
 }

@@ -152,7 +152,7 @@ async fn create_service<App: crate::application::Application>(
         Some(IpAddr::V6(_)) => 1,
     };
     let flags = 0;
-    let mut name = Cow::Borrowed(app.service_name());
+    let mut name = app.service_name();
     let type_ = super::SERVICE_TYPE;
     let domain = "";
     let host = match bind_addr {
@@ -173,9 +173,7 @@ async fn create_service<App: crate::application::Application>(
             Ok(_) => break,
             Err(err) => {
                 if err.name() == Some("org.freedesktop.Avahi.CollisionError") {
-                    name = Cow::Owned(
-                        proxy.get_alternative_service_name(&name).await?,
-                    );
+                    name = proxy.get_alternative_service_name(&name).await?;
                     continue;
                 } else {
                     return Err(err);

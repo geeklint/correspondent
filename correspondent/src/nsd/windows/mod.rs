@@ -1,8 +1,4 @@
-use std::{
-    future::Future,
-    net::IpAddr,
-    sync::Arc,
-};
+use std::{future::Future, net::IpAddr, sync::Arc};
 
 #[allow(clippy::unseparated_literal_suffix)]
 #[allow(clippy::unreadable_literal)]
@@ -14,12 +10,15 @@ mod bindings;
 mod browse;
 mod register;
 
-use {bindings::Windows::Win32::NetworkManagement::Dns,
-browse::{CancelBrowse, browse_services},
-register::{create_service}};
+use {
+    bindings::Windows::Win32::NetworkManagement::Dns,
+    browse::{browse_services, CancelBrowse},
+    register::{create_service, RegisterRequest},
+};
 
 pub struct NsdManager {
     _cancel_browse: Option<CancelToken<CancelBrowse>>,
+    _deregister: Option<RegisterRequest>,
 }
 
 impl<App> super::Interface<App> for NsdManager
@@ -41,10 +40,13 @@ where
         FoundFut: Send + Sync + Future<Output = ()>,
         Main: 'static + Send + Sync + Future<Output = ()>,
     {
-        create_service(&*app, port, bind_addr);
+        let _deregister = create_service(&*app, port, bind_addr);
         let _cancel_browse = browse_services(app, peer_found);
         tokio::spawn(main);
-        Some(Self { _cancel_browse })
+        Some(Self {
+            _cancel_browse,
+            _deregister,
+        })
     }
 }
 

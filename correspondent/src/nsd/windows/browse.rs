@@ -6,8 +6,7 @@ use std::{
 };
 
 use super::bindings::Windows::Win32::{
-    Foundation::PWSTR,
-    NetworkManagement::Dns,
+    Foundation::PWSTR, NetworkManagement::Dns,
 };
 
 pub(super) fn browse_services<App, Found, FoundFut>(

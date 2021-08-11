@@ -1,0 +1,20 @@
+[package]
+name = "correspondent-ffi"
+version = "0.1.0"
+edition = "2018"
+publish = false
+license = "Apache-2.0 OR MIT OR Zlib"
+
+[lib]
+name = "correspondent"
+crate-type = ["cdylib"]
+
+[profile.release]
+panic = "abort"
+lto = true
+
+[dependencies]
+thunderdome = "0.4.1"
+correspondent = { path = "../correspondent" }
+rcgen = { version = "0.8.6", features = ["pem", "x509-parser"] }
+tokio = { version = "1.0", features = ["full"] }

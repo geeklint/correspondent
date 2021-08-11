@@ -1,7 +1,7 @@
-use std::{
-    ffi::{c_void, CStr, CString},
-    os::raw::c_char,
-};
+/* SPDX-License-Identifier: (Apache-2.0 OR MIT OR Zlib) */
+/* Copyright © 2021 Violet Leonard */
+
+use std::{ffi::CString, os::raw::c_char};
 
 mod application;
 mod certificate;

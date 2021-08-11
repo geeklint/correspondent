@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: (Apache-2.0 OR MIT OR Zlib) */
+/* Copyright © 2021 Violet Leonard */
+
 use std::{future::Future, net::IpAddr, sync::Arc};
 
 #[allow(clippy::unseparated_literal_suffix)]

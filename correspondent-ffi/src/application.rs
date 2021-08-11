@@ -3,10 +3,7 @@
 
 use std::{
     collections::HashMap,
-    error::Error,
     ffi::{c_void, CStr, CString},
-    future::Future,
-    hash::Hash,
     os::raw::c_char,
     path::PathBuf,
     sync::Mutex,
@@ -14,33 +11,128 @@ use std::{
 
 use tokio::sync::oneshot;
 
+/// This v-table provides the core ability for a FFI client to define the
+/// functionality of the correspondent application.
+///
+/// See [correspondent documentation](https://docs.rs/correspondent/0.1.0/correspondent/trait.Application.html)
+/// for more details on Application.
 #[derive(Clone)]
 #[repr(C)]
 pub struct ApplicationVTable {
+    /// User-specified object pointer.
+    ///
+    /// # Safety
+    ///
+    /// This function pointer must be safe to send to arbitrary threads.
     pub obj: *mut c_void,
 
+    /// The maximum message size to accept from a peer.
+    ///
+    /// This is an approximate upper bound on the memory usage when receiving a
+    /// message.  This is important to avoid a situation where a malicious peer
+    /// might cause a denial of service by sending an incredibly large message.
+    /// This does not effect the amount of memory allocated for small messages;
+    /// it only imposes a maximum.
     pub max_message_size: usize,
 
+    /// Provide a location for correspondent to store some information, notably
+    /// offline copies of signed certificates.
+    ///
+    /// # Safety
+    ///
+    /// Must point to a valid allocation of at least
+    /// `application_data_dir_len` bytes, indicating a UTF-8 encoded
+    /// directory path.
     pub application_data_dir: *const u8,
+
+    /// See `application_data_dir`.
     pub application_data_dir_len: usize,
 
+    /// The name of the DNS-SD service to use.
+    ///
+    /// # Safety
+    ///
+    /// Must point to a valid allocation of at least `service_name_len` bytes,
+    /// UTF-8 (preferably ASCII) encoded.
     pub service_name: *const u8,
+
+    /// See `service_name`.
     pub service_name_len: usize,
 
+    /// The identity string used by this instance.
+    ///
+    /// # Safety
+    ///
+    /// Must point to a valid allocation of at least `identity_len` bytes,
+    /// UTF-8 (preferably ASCII) encoded.
     pub identity: *const u8,
+
+    /// See `identity`.
     pub identity_len: usize,
 
+    /// Suffix to use for DNS names for clients, e.g. ".example.com".
+    ///
+    /// # Safety
+    ///
+    /// Must point to a valid allocation of at least `dns_suffix_len` bytes,
+    /// UTF-8 (preferably ASCII) encoded.
     pub dns_suffix: *const u8,
+
+    /// See `dns_suffix`.
     pub dns_suffix_len: usize,
 
+    /// This function is called by the library when it is done using the
+    /// contents of this v-table.  To avoid a memory leak, `cleanup` should
+    /// de-allocate all the memory associated with the v-table.
+    ///
+    /// # Safety
+    ///
+    /// This function pointer must not be null.
+    ///
+    /// This function must tolerate being called from an arbitrary thread.
     pub cleanup: extern "C" fn(obj: *mut ApplicationVTable),
 
+    /// This function is called by the library when it needs to sign a
+    /// certificate to use.
+    ///
+    /// This function is asynchronous. It should return without blocking, and
+    /// use the [`finish_signing`](crate::finish_signing) function to complete
+    /// the asynchronous operation.
+    ///
+    /// # Safety
+    ///
+    /// This function pointer must not be null.
+    ///
+    /// This function must tolerate being called simultaneously from
+    /// arbitrary threads.
+    ///
+    /// The `csr_pem` pointer is valid only for the duration of this function.
+    /// Implementers should make a copy with e.g. `strdup` if they need access
+    /// to the data after the function has returned.
+    ///
+    /// The `async_context` pointer is valid until passed into
+    /// [`finish_signing`](crate::finish_signing).
+    ///
+    /// To avoid a memory leak, the `async_context` pointer must be passed
+    /// into [`finish_signing`](crate::finish_signing) eventually.
     pub sign_certificate: extern "C" fn(
         obj: *mut c_void,
         csr_pem: *const c_char,
         async_context: *mut SigningContext,
     ),
 
+    /// This function is called by the library when a message is received.
+    ///
+    /// # Safety
+    ///
+    /// This function pointer must not be null.
+    ///
+    /// This function must tolerate being called simultaneously from
+    /// arbitrary threads.
+    ///
+    /// The `sender`, `msg`, and `msg_len` pointers are valid only for the
+    /// duration of this function.  Implementers should make a copy of the
+    /// pointed-to data if they need access after the function has returned.
     pub handle_message: extern "C" fn(
         obj: *mut c_void,
         sender: *const PeerId,
@@ -48,21 +140,46 @@ pub struct ApplicationVTable {
         msg_len: usize,
     ),
 
+    /// This function is called by the library when a peer first connects.
+    ///
+    /// # Safety
+    ///
+    /// This function pointer must not be null.
+    ///
+    /// This function must tolerate being called simultaneously from
+    /// arbitrary threads.
+    ///
+    /// The `id`, pointer is valid only for the duration of this function.
+    /// Implementers should make a copy of the pointed-to data if they need
+    /// access after the function has returned.
     pub handle_new_peer: extern "C" fn(obj: *mut c_void, id: *const PeerId),
+
+    /// This function is called by the library when a peer is no longer
+    /// connected.
+    ///
+    /// # Safety
+    ///
+    /// This function pointer must not be null.
+    ///
+    /// This function must tolerate being called simultaneously from
+    /// arbitrary threads.
+    ///
+    /// The `id`, pointer is valid only for the duration of this function.
+    /// Implementers should make a copy of the pointed-to data if they need
+    /// access after the function has returned.
     pub handle_peer_gone: extern "C" fn(obj: *mut c_void, id: *const PeerId),
 }
 
 unsafe impl Send for ApplicationVTable {}
 unsafe impl Sync for ApplicationVTable {}
 
-#[repr(C)]
-pub struct CertificateResponse {
-    pub success: bool,
-    pub ctx: *mut SigningContext,
-    pub client_chain_pem: *const c_char,
-    pub authority_pem: *const c_char,
-}
-
+/// This type represents an active asynchronous context for signing a
+/// certificate.
+///
+/// # Safety
+///
+/// Foreign code is not allowed to make any assumptions about the interior
+/// layout of this type.
 pub struct SigningContext {
     send: oneshot::Sender<correspondent::CertificateResponse>,
 }
@@ -75,13 +192,18 @@ impl SigningContext {
         authority_pem: *const c_char,
     ) {
         if success {
-            assert!(!client_chain_pem.is_null());
-            assert!(!authority_pem.is_null());
-            let client_chain_pem = CStr::from_ptr(client_chain_pem)
-                .to_string_lossy()
-                .into_owned();
-            let authority_pem =
-                CStr::from_ptr(authority_pem).to_string_lossy().into_owned();
+            if client_chain_pem.is_null() || authority_pem.is_null() {
+                return;
+            }
+            let client_chain_pem =
+                match CStr::from_ptr(client_chain_pem).to_str() {
+                    Ok(s) => s.to_string(),
+                    Err(_) => return,
+                };
+            let authority_pem = match CStr::from_ptr(authority_pem).to_str() {
+                Ok(s) => s.to_string(),
+                Err(_) => return,
+            };
             let _ = self.send.send(correspondent::CertificateResponse {
                 client_chain_pem,
                 authority_pem,
@@ -90,10 +212,22 @@ impl SigningContext {
     }
 }
 
+/// This type represents the identity of a peer, along with a unique
+/// connection id.
+///
+/// Since peers may advertise an arbitrary identity string, the unique index
+/// can be used to differentiate two peers with the same identity string.
 #[repr(C)]
 pub struct PeerId {
+    /// The identity the peer advertised, as a pointer to a buffer of at least
+    /// `identity_len` bytes, UTF-8 (preferably ASCII) encoded.
     pub identity: *const u8,
+
+    /// See `identity`.
     pub identity_len: usize,
+
+    /// An index guaranteed to uniquely identify the specific peer for
+    /// as long as the peer is connected.
     pub unique: u64,
 }
 
@@ -104,11 +238,23 @@ type PeerIdMap = Mutex<(
     HashMap<PeerIdInternal, thunderdome::Index>,
 )>;
 
-struct Application {
+pub struct Application {
     peer_id_map: PeerIdMap,
     identity: String,
     dns_suffix: String,
     vtable: ApplicationVTable,
+}
+
+impl Application {
+    pub(crate) unsafe fn lookup_peer_id(
+        &self,
+        unique: u64,
+    ) -> Option<PeerIdInternal> {
+        let index = thunderdome::Index::from_bits(unique);
+        let mut guard = self.peer_id_map.lock().expect("Mutex was poisoned");
+        let (arena, _lookup) = &mut *guard;
+        arena.get(index).cloned()
+    }
 }
 
 macro_rules! vtable_string {

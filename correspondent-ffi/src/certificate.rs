@@ -8,15 +8,18 @@ use std::{
 
 use rcgen::RcgenError;
 
-pub(crate) unsafe fn do_sign(
+pub unsafe fn do_sign(
     csr_pem: *const c_char,
     authority_pem: *const c_char,
     authority_key_pk8: *const u8,
     authority_key_pk8_len: usize,
 ) -> Result<*mut c_char, RcgenError> {
-    assert!(!csr_pem.is_null());
-    assert!(!authority_pem.is_null());
-    assert!(!authority_key_pk8.is_null());
+    if csr_pem.is_null()
+        || authority_pem.is_null()
+        || authority_key_pk8.is_null()
+    {
+        return Err(RcgenError::CouldNotParseCertificate);
+    }
     let csr_pem = CStr::from_ptr(csr_pem)
         .to_str()
         .map_err(|_| RcgenError::CouldNotParseCertificate)?;
@@ -35,20 +38,30 @@ pub(crate) unsafe fn do_sign(
             CString::new(string)
                 .map_err(|_| RcgenError::CouldNotParseCertificate)
         })
-        .map(|c_string| c_string.into_raw())
+        .map(CString::into_raw)
 }
 
+/// A representation of a certificate, along with signing keys.
 #[repr(C)]
 pub struct AuthorityCertificate {
+    /// A pointer to a null-terminated ASCII PEM string representing the
+    /// certificate.
     pub authority_pem: *mut c_char,
+
+    /// A pointer to an allocation of at least `authority_key_pk8_len` bytes
+    /// of a PK8 encoded private key.
     pub authority_key_pk8: *mut u8,
+
+    /// See `authority_key_pk8`.
     pub authority_key_pk8_len: usize,
 }
 
-pub(crate) unsafe fn create_ca_cert(
+pub unsafe fn create_ca_cert(
     dns_name: *const c_char,
 ) -> Result<*mut AuthorityCertificate, rcgen::RcgenError> {
-    assert!(!dns_name.is_null());
+    if dns_name.is_null() {
+        return Err(RcgenError::CouldNotParseCertificate);
+    }
     let dns_name = CStr::from_ptr(dns_name).to_string_lossy().into_owned();
     let ca_cert = rcgen::generate_simple_self_signed(&[dns_name][..])?;
     let cert_pem = ca_cert.serialize_pem()?;
@@ -66,15 +79,18 @@ pub(crate) unsafe fn create_ca_cert(
     Ok(Box::into_raw(result))
 }
 
-pub(crate) unsafe fn cleanup_ca_cert(cert: *mut AuthorityCertificate) {
-    assert!(!cert.is_null());
-    let cert = Box::from_raw(cert);
-    assert!(!cert.authority_pem.is_null());
-    assert!(!cert.authority_key_pk8.is_null());
-    CString::from_raw(cert.authority_pem);
-    let slice = std::slice::from_raw_parts_mut(
-        cert.authority_key_pk8,
-        cert.authority_key_pk8_len,
-    );
-    Box::from_raw(slice);
+pub unsafe fn free_ca_cert(cert: *mut AuthorityCertificate) {
+    if !cert.is_null() {
+        let cert = Box::from_raw(cert);
+        if !cert.authority_pem.is_null() {
+            CString::from_raw(cert.authority_pem);
+        }
+        if !cert.authority_key_pk8.is_null() {
+            let slice = std::slice::from_raw_parts_mut(
+                cert.authority_key_pk8,
+                cert.authority_key_pk8_len,
+            );
+            Box::from_raw(slice);
+        }
+    }
 }

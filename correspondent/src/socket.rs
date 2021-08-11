@@ -172,6 +172,22 @@ impl<App: Application> Socket<App> {
         });
     }
 
+    /// Send a message to a specific peer with the given id
+    pub fn send_to_id(&self, target: PeerId<App::Identity>, msg: Vec<u8>) {
+        let peers = Arc::clone(&self.peers);
+        tokio::spawn(async move {
+            let sending;
+            {
+                let guard = peers.lock().await;
+                sending = match guard.get_connection(target.0, target.1) {
+                    Some(conn) => send_buf(conn, &msg),
+                    None => return,
+                };
+            }
+            sending.await;
+        });
+    }
+
     /// Send a message to all connected peers.
     pub fn send_to_all(&self, msg: Vec<u8>) {
         let peers = Arc::clone(&self.peers);

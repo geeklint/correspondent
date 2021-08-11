@@ -40,6 +40,19 @@ impl<K: Ord> ConnectionSet<K> {
             conn_id: connection.stable_id(),
         });
     }
+
+    pub fn get_connection(
+        &self,
+        key: K,
+        conn_stable_id: usize,
+    ) -> Option<quinn::Connection> {
+        self.inner
+            .get(&ConnectionEntryId {
+                key,
+                conn_id: conn_stable_id,
+            })
+            .map(|entry| entry.connection.clone())
+    }
 }
 
 impl<K: Ord + Clone> ConnectionSet<K> {

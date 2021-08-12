@@ -11,6 +11,11 @@ use std::{
 
 use tokio::sync::oneshot;
 
+use correspondent::PeerId as CorrespondentPeerId;
+
+/// cbindgen:ignore
+type PeerIdInternal = CorrespondentPeerId<String>;
+
 /// This v-table provides the core ability for a FFI client to define the
 /// functionality of the correspondent application.
 ///
@@ -240,8 +245,6 @@ pub struct PeerId {
     pub unique: u64,
 }
 
-type PeerIdInternal = correspondent::PeerId<String>;
-
 type PeerIdMap = Mutex<(
     thunderdome::Arena<PeerIdInternal>,
     HashMap<PeerIdInternal, thunderdome::Index>,
@@ -352,11 +355,7 @@ impl correspondent::Application for Application {
         recv
     }
 
-    fn handle_message(
-        &self,
-        sender: &correspondent::PeerId<String>,
-        msg: Vec<u8>,
-    ) {
+    fn handle_message(&self, sender: &PeerIdInternal, msg: Vec<u8>) {
         let index = {
             let mut guard =
                 self.peer_id_map.lock().expect("Mutex was poisoned");
@@ -382,7 +381,7 @@ impl correspondent::Application for Application {
 
     fn handle_new_peer(
         &self,
-        id: &correspondent::PeerId<String>,
+        id: &PeerIdInternal,
         _peer: &correspondent::Peer,
     ) {
         let index = {
@@ -402,7 +401,7 @@ impl correspondent::Application for Application {
         (self.vtable.handle_new_peer)(self.vtable.obj, &peer_id);
     }
 
-    fn handle_peer_gone(&self, peer: &correspondent::PeerId<String>) {
+    fn handle_peer_gone(&self, peer: &PeerIdInternal) {
         let index = {
             let mut guard =
                 self.peer_id_map.lock().expect("Mutex was poisoned");

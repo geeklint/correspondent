@@ -3,3 +3,8 @@ members = [
     "correspondent",
     "correspondent-ffi",
 ]
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1

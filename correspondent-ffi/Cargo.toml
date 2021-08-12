@@ -9,10 +9,6 @@ license = "Apache-2.0 OR MIT OR Zlib"
 name = "correspondent"
 crate-type = ["cdylib"]
 
-[profile.release]
-panic = "abort"
-lto = true
-
 [dependencies]
 thunderdome = "0.4.1"
 correspondent = { path = "../correspondent" }

@@ -62,7 +62,11 @@ pub unsafe fn start(app: *const ApplicationVTable) -> *mut Socket {
     if app.is_null() {
         return std::ptr::null_mut();
     }
-    let app = Application::from((&*app).clone());
+    let app = (&*app).clone();
+    if !app.check() {
+        return std::ptr::null_mut();
+    }
+    let app = Application::from(app);
     let (send, recv) = channel();
     let (_handle, pending) = oneshot::channel();
     std::thread::spawn(move || {

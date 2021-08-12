@@ -173,6 +173,15 @@ pub struct ApplicationVTable {
 unsafe impl Send for ApplicationVTable {}
 unsafe impl Sync for ApplicationVTable {}
 
+impl ApplicationVTable {
+    pub(crate) fn check(&self) -> bool {
+        !(self.application_data_dir.is_null()
+            || self.service_name.is_null()
+            || self.identity.is_null()
+            || self.dns_suffix.is_null())
+    }
+}
+
 /// This type represents an active asynchronous context for signing a
 /// certificate.
 ///

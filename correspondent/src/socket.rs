@@ -41,6 +41,7 @@ pub struct Socket<App: Application> {
     endpoint: Endpoint,
     peers: PeerList<App::Identity>,
     active_connections: ActiveConnections,
+    runtime: tokio::runtime::Handle,
     nsd_manager: Arc<NsdManager>,
 }
 
@@ -51,6 +52,7 @@ impl<App: Application> Clone for Socket<App> {
             endpoint: self.endpoint.clone(),
             peers: Arc::clone(&self.peers),
             active_connections: Arc::clone(&self.active_connections),
+            runtime: self.runtime.clone(),
             nsd_manager: Arc::clone(&self.nsd_manager),
         }
     }
@@ -103,6 +105,7 @@ impl<App: Application> Socket<App> {
             endpoint,
             peers,
             active_connections,
+            runtime: tokio::runtime::Handle::current(),
             // pass a socket with an empty nsd mananger into the nsd mananger,
             // so as to avoid circular references
             nsd_manager: Arc::new(NsdManager::empty()),
@@ -168,7 +171,7 @@ impl<App: Application> Socket<App> {
     /// Send a message to all connected peers with the specified identity
     pub fn send_to(&self, target: App::Identity, msg: Vec<u8>) {
         let peers = Arc::clone(&self.peers);
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             let sending;
             {
                 let guard = peers.lock().await;
@@ -181,7 +184,7 @@ impl<App: Application> Socket<App> {
     /// Send a message to a specific peer with the given id
     pub fn send_to_id(&self, target: PeerId<App::Identity>, msg: Vec<u8>) {
         let peers = Arc::clone(&self.peers);
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             let sending;
             {
                 let guard = peers.lock().await;
@@ -199,7 +202,7 @@ impl<App: Application> Socket<App> {
     /// Send a message to all connected peers.
     pub fn send_to_all(&self, msg: Vec<u8>) {
         let peers = Arc::clone(&self.peers);
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             let sending;
             {
                 let guard = peers.lock().await;

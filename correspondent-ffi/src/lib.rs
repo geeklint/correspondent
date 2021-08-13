@@ -107,9 +107,10 @@ pub unsafe extern "C" fn socket_send_to(
 /// # Safety
 ///
 /// `socket` must point to a valid socket previously returned from a call to
-/// [`start`].  `msg` must point to a valid allocation of at least
-/// `msg_len` bytes.  `msg` is not used after this function returns;
-/// the caller must clean it up.
+/// [`start`].  `id` must point to a valid allocation of at least
+/// `id_len` bytes.  `msg` must point to a valid allocation of at least
+/// `msg_len` bytes.  `id` and `msg` are not used after this function returns;
+/// the caller must clean them up.
 #[export_name = "correspondent_socket_send_to_id"]
 pub unsafe extern "C" fn socket_send_to_id(
     socket: *const Socket,

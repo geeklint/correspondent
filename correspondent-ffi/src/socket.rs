@@ -36,17 +36,26 @@ impl Socket {
 
     pub(crate) unsafe fn send_to_id(
         &self,
-        id: u64,
+        id: *const u8,
+        id_len: usize,
+        unique: usize,
         msg: *const u8,
         msg_len: usize,
     ) {
-        if msg.is_null() {
+        if id.is_null() || msg.is_null() {
             return;
         }
-        if let Some(peer_id) = self.inner.app().lookup_peer_id(id) {
-            let msg_bytes = std::slice::from_raw_parts(msg, msg_len);
-            self.inner.send_to_id(peer_id, msg_bytes.to_vec());
-        }
+        let id_bytes = std::slice::from_raw_parts(id, id_len);
+        let peer_id = if let Ok(id_str) = std::str::from_utf8(id_bytes) {
+            correspondent::PeerId {
+                identity: id_str.to_string(),
+                unique,
+            }
+        } else {
+            return;
+        };
+        let msg_bytes = std::slice::from_raw_parts(msg, msg_len);
+        self.inner.send_to_id(peer_id, msg_bytes.to_vec());
     }
 
     pub(crate) unsafe fn send_to_all(&self, msg: *const u8, msg_len: usize) {

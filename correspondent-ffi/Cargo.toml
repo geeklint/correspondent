@@ -10,7 +10,6 @@ name = "correspondent"
 crate-type = ["cdylib"]
 
 [dependencies]
-thunderdome = "0.4.1"
 correspondent = { path = "../correspondent" }
 rcgen = { version = "0.8.6", features = ["pem", "x509-parser"] }
 tokio = { version = "1.0", features = ["full"] }

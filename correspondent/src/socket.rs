@@ -24,7 +24,13 @@ use crate::{
 
 /// Unique identifier for a connection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct PeerId<T>(pub T, usize);
+pub struct PeerId<T> {
+    /// Identity advertized by the peer
+    pub identity: T,
+
+    /// A unique identifier for the connection
+    pub unique: usize,
+}
 
 type PeerList<T> = Arc<Mutex<ConnectionSet<T>>>;
 type ActiveConnections = Arc<Mutex<HashSet<ConnectionIdentity>>>;
@@ -179,7 +185,9 @@ impl<App: Application> Socket<App> {
             let sending;
             {
                 let guard = peers.lock().await;
-                sending = match guard.get_connection(target.0, target.1) {
+                sending = match guard
+                    .get_connection(target.identity, target.unique)
+                {
                     Some(conn) => send_buf(conn, &msg),
                     None => return,
                 };
@@ -274,7 +282,10 @@ impl Peer {
         });
         let ((), hello) = tokio::try_join!(sending_hello, recving_hello)?;
         verify_peer(&connection, &*app, &hello).ok_or(PeerNotConnected)?;
-        let peer_id = PeerId(hello.clone(), connection.stable_id());
+        let peer_id = PeerId {
+            identity: hello.clone(),
+            unique: connection.stable_id(),
+        };
         let peer = Self {
             conn: connection.clone(),
         };

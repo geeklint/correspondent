@@ -106,17 +106,17 @@ impl correspondent::Application for Application {
 
     fn handle_message(&self, sender: &PeerId<Self::Identity>, msg: Vec<u8>) {
         let text = String::from_utf8_lossy(&msg);
-        println!("\r{}: {}", sender.0, &*text);
+        println!("\r{}: {}", sender.identity, &*text);
         self.show_prompt();
     }
 
     fn handle_new_peer(&self, id: &PeerId<Self::Identity>, _peer: &Peer) {
-        println!("\r{} joined.", id.0);
+        println!("\r{} joined.", id.identity);
         self.show_prompt();
     }
 
     fn handle_peer_gone(&self, id: &PeerId<Self::Identity>) {
-        print!("\r{} left.", id.0);
+        print!("\r{} left.", id.identity);
         self.show_prompt();
     }
 

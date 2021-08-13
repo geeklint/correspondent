@@ -2,11 +2,9 @@
 /* Copyright © 2021 Violet Leonard */
 
 use std::{
-    collections::HashMap,
     ffi::{c_void, CStr, CString},
     os::raw::c_char,
     path::PathBuf,
-    sync::Mutex,
 };
 
 use tokio::sync::oneshot;
@@ -242,31 +240,13 @@ pub struct PeerId {
 
     /// An index guaranteed to uniquely identify the specific peer for
     /// as long as the peer is connected.
-    pub unique: u64,
+    pub unique: usize,
 }
 
-type PeerIdMap = Mutex<(
-    thunderdome::Arena<PeerIdInternal>,
-    HashMap<PeerIdInternal, thunderdome::Index>,
-)>;
-
 pub struct Application {
-    peer_id_map: PeerIdMap,
     identity: String,
     dns_suffix: String,
     vtable: ApplicationVTable,
-}
-
-impl Application {
-    pub(crate) unsafe fn lookup_peer_id(
-        &self,
-        unique: u64,
-    ) -> Option<PeerIdInternal> {
-        let index = thunderdome::Index::from_bits(unique);
-        let mut guard = self.peer_id_map.lock().expect("Mutex was poisoned");
-        let (arena, _lookup) = &mut *guard;
-        arena.get(index).cloned()
-    }
 }
 
 macro_rules! vtable_string {
@@ -284,7 +264,6 @@ impl From<ApplicationVTable> for Application {
         let identity = vtable_string!(vtable, identity, identity_len);
         let dns_suffix = vtable_string!(vtable, dns_suffix, dns_suffix_len);
         Self {
-            peer_id_map: Mutex::default(),
             identity,
             dns_suffix,
             vtable,
@@ -356,20 +335,11 @@ impl correspondent::Application for Application {
     }
 
     fn handle_message(&self, sender: &PeerIdInternal, msg: Vec<u8>) {
-        let index = {
-            let mut guard =
-                self.peer_id_map.lock().expect("Mutex was poisoned");
-            let (_arena, lookup) = &mut *guard;
-            lookup
-                .get(sender)
-                .copied()
-                .expect("Failed to find peer in lookup table")
-        };
-        let identity: &[u8] = sender.0.as_bytes();
+        let identity: &[u8] = sender.identity.as_bytes();
         let peer_id = PeerId {
             identity: identity.as_ptr(),
             identity_len: identity.len(),
-            unique: index.to_bits(),
+            unique: sender.unique,
         };
         (self.vtable.handle_message)(
             self.vtable.obj,
@@ -384,39 +354,21 @@ impl correspondent::Application for Application {
         id: &PeerIdInternal,
         _peer: &correspondent::Peer,
     ) {
-        let index = {
-            let mut guard =
-                self.peer_id_map.lock().expect("Mutex was poisoned");
-            let (arena, lookup) = &mut *guard;
-            let index = arena.insert(id.clone());
-            lookup.insert(id.clone(), index);
-            index
-        };
-        let identity: &[u8] = id.0.as_bytes();
+        let identity: &[u8] = id.identity.as_bytes();
         let peer_id = PeerId {
             identity: identity.as_ptr(),
             identity_len: identity.len(),
-            unique: index.to_bits(),
+            unique: id.unique,
         };
         (self.vtable.handle_new_peer)(self.vtable.obj, &peer_id);
     }
 
     fn handle_peer_gone(&self, peer: &PeerIdInternal) {
-        let index = {
-            let mut guard =
-                self.peer_id_map.lock().expect("Mutex was poisoned");
-            let (arena, lookup) = &mut *guard;
-            let index = lookup
-                .remove(peer)
-                .expect("Failed to find peer in lookup table");
-            arena.remove(index);
-            index
-        };
-        let identity: &[u8] = peer.0.as_bytes();
+        let identity: &[u8] = peer.identity.as_bytes();
         let peer_id = PeerId {
             identity: identity.as_ptr(),
             identity_len: identity.len(),
-            unique: index.to_bits(),
+            unique: peer.unique,
         };
         (self.vtable.handle_peer_gone)(self.vtable.obj, &peer_id);
     }

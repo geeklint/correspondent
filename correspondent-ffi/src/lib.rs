@@ -113,12 +113,14 @@ pub unsafe extern "C" fn socket_send_to(
 #[export_name = "correspondent_socket_send_to_id"]
 pub unsafe extern "C" fn socket_send_to_id(
     socket: *const Socket,
-    id: u64,
+    id: *const u8,
+    id_len: usize,
+    unique: usize,
     msg: *const u8,
     msg_len: usize,
 ) {
     if !socket.is_null() {
-        (&*socket).send_to_id(id, msg, msg_len);
+        (&*socket).send_to_id(id, id_len, unique, msg, msg_len);
     }
 }
 

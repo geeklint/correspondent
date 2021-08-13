@@ -129,6 +129,9 @@ pub(super) struct RegisterRequest {
     request: *mut Dns::DNS_SERVICE_REGISTER_REQUEST,
 }
 
+unsafe impl Send for RegisterRequest {}
+unsafe impl Sync for RegisterRequest {}
+
 impl Drop for RegisterRequest {
     fn drop(&mut self) {
         assert!(!self.request.is_null());

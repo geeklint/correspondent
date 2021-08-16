@@ -368,7 +368,12 @@ impl SocketCertificate {
         std::fs::create_dir_all(&data_dir)?;
         data_dir.push("instance-certificate");
         if let Some(cert) = Self::load(&data_dir).await? {
-            return Ok(cert);
+            let (_rem, pem) =
+                x509_parser::pem::parse_x509_pem(cert.chain_pem.as_bytes())?;
+            let parsed = pem.parse_x509()?;
+            if parsed.validity().is_valid() {
+                return Ok(cert);
+            }
         }
         let new = socket_certificate::<App>(app);
         let CertificateResponse {

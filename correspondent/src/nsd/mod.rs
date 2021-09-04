@@ -7,7 +7,7 @@ use std::{
 };
 
 use tokio::{
-    sync::{Mutex, Notify},
+    sync::{oneshot, Mutex, Notify},
     time::sleep,
 };
 
@@ -29,11 +29,16 @@ pub type NsdManager = NsdManagerGeneric<platform::NsdManager>;
 #[derive(Debug)]
 pub struct NsdManagerGeneric<Plat> {
     _plat: Option<Plat>,
+    _handle: oneshot::Sender<()>,
 }
 
 impl<Plat> NsdManagerGeneric<Plat> {
     pub fn empty() -> Self {
-        Self { _plat: None }
+        let (_handle, _) = oneshot::channel();
+        Self {
+            _plat: None,
+            _handle,
+        }
     }
 
     pub fn new<App>(socket: crate::socket::Socket<App>) -> Self
@@ -41,10 +46,14 @@ impl<Plat> NsdManagerGeneric<Plat> {
         App: crate::application::Application,
         Plat: Interface<App>,
     {
+        let (_handle, mut alive) = oneshot::channel();
         let port = if let Some(port) = socket.port() {
             port
         } else {
-            return Self { _plat: None };
+            return Self {
+                _plat: None,
+                _handle,
+            };
         };
         let new_peers = Arc::new(NewPeers::default());
         let proxy_peer_found = {
@@ -62,7 +71,10 @@ impl<Plat> NsdManagerGeneric<Plat> {
         let sleep_time = Duration::from_millis(100);
         let main = async move {
             loop {
-                new_peers.notify.notified().await;
+                tokio::select!(
+                    _ = new_peers.notify.notified() => {},
+                    _ = &mut alive => { break; },
+                );
                 sleep(sleep_time).await;
                 for ((_host, port, identity), mut addresses) in
                     new_peers.found.lock().await.drain()
@@ -97,6 +109,7 @@ impl<Plat> NsdManagerGeneric<Plat> {
                 proxy_peer_found,
                 main,
             ),
+            _handle,
         }
     }
 }

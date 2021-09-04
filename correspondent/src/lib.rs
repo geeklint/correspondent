@@ -59,5 +59,5 @@ mod util;
 
 pub use self::{
     application::{Application, CertificateResponse},
-    socket::{Peer, PeerId, Socket},
+    socket::{Event, Events, Peer, PeerId, Socket},
 };

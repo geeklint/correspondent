@@ -74,7 +74,9 @@ macro_rules! send_to_many {
 
 impl<App: Application> Socket<App> {
     /// Start running the socket, listening for incoming connections.
-    pub async fn start(app: Arc<App>) -> Result<Self, Box<dyn Error>> {
+    pub async fn start(
+        app: Arc<App>,
+    ) -> Result<(Self, Events<App::Identity>), Box<dyn Error>> {
         let certificate = SocketCertificate::get(&*app).await?;
         let client_cfg = configure_client(&certificate)?;
         let server_cfg = configure_server(&certificate)?;
@@ -88,7 +90,6 @@ impl<App: Application> Socket<App> {
         let (endpoint, incoming) = builder
             .bind(&bind_addr.expect("Failed to parse known valid SockAddr"))?;
         let app2 = Arc::clone(&app);
-        let app3 = Arc::clone(&app);
         let peers = PeerList::default();
         let peers2 = Arc::clone(&peers);
         let active_connections = ActiveConnections::default();
@@ -121,31 +122,6 @@ impl<App: Application> Socket<App> {
                 })
                 .boxed(),
         );
-        tokio::spawn(async move {
-            while let Some(event) = events.next().await {
-                match event {
-                    Event::NewPeer(peer_id, conn) => {
-                        app3.handle_new_peer(&peer_id, &Peer { conn });
-                    }
-                    Event::PeerGone(peer_id) => {
-                        app3.handle_peer_gone(&peer_id);
-                    }
-                    Event::UniStream(peer_id, stream) => {
-                        let app3 = Arc::clone(&app3);
-                        tokio::spawn(async move {
-                            app3.handle_message(
-                                &peer_id,
-                                stream
-                                    .read_to_end(app3.max_message_size())
-                                    .await
-                                    .ok()?,
-                            );
-                            Some(())
-                        });
-                    }
-                }
-            }
-        });
         let temp = Self {
             app,
             endpoint,
@@ -159,10 +135,17 @@ impl<App: Application> Socket<App> {
         };
         let nsd_manager = Arc::new(NsdManager::new(temp.clone()));
         // return a version with a real NsdManager
-        Ok(Self {
-            nsd_manager,
-            ..temp
-        })
+        Ok((
+            Self {
+                nsd_manager,
+                ..temp
+            },
+            events,
+        ))
+    }
+
+    pub fn endpoint(&self) -> &quinn::Endpoint {
+        &self.endpoint
     }
 
     /// Try to get the port this socket is operating on.
@@ -263,7 +246,7 @@ impl<App: Application> Socket<App> {
     }
 }
 
-enum Event<Id> {
+pub enum Event<Id> {
     NewPeer(PeerId<Id>, quinn::Connection),
     PeerGone(PeerId<Id>),
     UniStream(PeerId<Id>, quinn::RecvStream),
@@ -277,7 +260,7 @@ enum InternalEvent<Id> {
     NewStream(InternalEventStream<Id>),
 }
 
-struct Events<Id> {
+pub struct Events<Id> {
     streams: futures_util::stream::SelectAll<InternalEventStream<Id>>,
 }
 
@@ -369,7 +352,7 @@ impl Peer {
                 _ => return Err(PeerNotConnected),
             };
             let buf = first_stream
-                .read_to_end(app.max_message_size())
+                .read_to_end(256)
                 .await
                 .map_err(|_| PeerNotConnected)?;
             let hello = app.identity_from_txt(&buf).ok_or(PeerNotConnected)?;

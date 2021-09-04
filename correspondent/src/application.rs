@@ -38,15 +38,6 @@ pub trait Application: 'static + Send + Sync {
     /// offline copies of signed certificates.
     fn application_data_dir(&self) -> PathBuf;
 
-    /// The maximum message size to accept from a peer.
-    ///
-    /// This is an approximate upper bound on the memory usage when receiving a
-    /// message.  This is important to avoid a situation where a malicious peer
-    /// might cause a denial of service by sending an incredibly large message.
-    /// This does not effect the amount of memory allocated for small messages;
-    /// it only imposes a maximum.
-    fn max_message_size(&self) -> usize;
-
     /// The name of the DNS-SD service to use.
     fn service_name(&self) -> String;
 
@@ -79,15 +70,6 @@ pub trait Application: 'static + Send + Sync {
     /// Sign a certificate based on a PEM-formatted certificate signing
     /// request.
     fn sign_certificate(&self, csr_pem: &str) -> Self::SigningFuture;
-
-    /// Callback called when a peer sends a message.
-    fn handle_message(&self, sender: &PeerId<Self::Identity>, msg: Vec<u8>);
-
-    /// Callback called when a new peer connects.
-    fn handle_new_peer(&self, id: &PeerId<Self::Identity>, peer: &Peer);
-
-    /// Callback called when a peer is no longer connected.
-    fn handle_peer_gone(&self, peer: &PeerId<Self::Identity>);
 }
 
 /// Type to return from Application::sign_certificate.

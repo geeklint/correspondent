@@ -12,7 +12,9 @@
 
 use std::{future::Ready, io::Write, path::PathBuf, sync::Arc};
 
-use correspondent::{CertificateResponse, Peer, PeerId, Socket};
+use futures_util::stream::StreamExt;
+
+use correspondent::{CertificateResponse, Event, Socket};
 
 // These certificates are publicly available, and should not be used for
 // real applications
@@ -28,36 +30,60 @@ async fn main() {
     let ca_cert = rcgen::Certificate::from_params(params).unwrap();
 
     let process_id = std::process::id();
+
+    let show_prompt = move || {
+        print!("{}: ", process_id);
+        let _ = std::io::stdout().flush();
+    };
+
     let app = Application {
         process_id,
         ca_cert,
     };
-    let socket = Socket::start(Arc::new(app)).await.unwrap();
-    tokio::task::spawn_blocking(move || {
-        use std::io::BufRead;
-        let stdin = std::io::stdin();
-        let mut lines = stdin.lock().lines();
-        socket.app().show_prompt();
-        while let Some(Ok(line)) = lines.next() {
-            socket.send_to_all(line.into_bytes());
-            socket.app().show_prompt();
-        }
-        println!();
-    })
-    .await
-    .unwrap();
+    let (socket, mut events) = Socket::start(Arc::new(app)).await.unwrap();
+    let _ = tokio::join!(
+        tokio::task::spawn_blocking(move || {
+            use std::io::BufRead;
+            let stdin = std::io::stdin();
+            let mut lines = stdin.lock().lines();
+            show_prompt();
+            while let Some(Ok(line)) = lines.next() {
+                socket.send_to_all(line.into_bytes());
+                show_prompt();
+            }
+            socket.endpoint().close(0u8.into(), b"");
+        }),
+        tokio::spawn(async move {
+            while let Some(event) = events.next().await {
+                match event {
+                    Event::NewPeer(peer_id, _connection) => {
+                        println!("\r{} joined.", peer_id.identity);
+                        show_prompt();
+                    }
+                    Event::PeerGone(peer_id) => {
+                        println!("\r{} left.", peer_id.identity);
+                        show_prompt();
+                    }
+                    Event::UniStream(peer_id, stream) => {
+                        tokio::spawn(async move {
+                            if let Ok(message) = stream.read_to_end(1024).await
+                            {
+                                let text = String::from_utf8_lossy(&message);
+                                println!("\r{}: {}", peer_id.identity, &*text);
+                                show_prompt();
+                            }
+                        });
+                    }
+                }
+            }
+        })
+    );
+    println!();
 }
 
 pub struct Application {
     process_id: u32,
     ca_cert: rcgen::Certificate,
-}
-
-impl Application {
-    fn show_prompt(&self) {
-        print!("{}: ", self.process_id);
-        let _ = std::io::stdout().flush();
-    }
 }
 
 impl correspondent::Application for Application {
@@ -98,26 +124,6 @@ impl correspondent::Application for Application {
                 authority_pem: CA_CERT.to_string(),
             })
         })())
-    }
-
-    fn max_message_size(&self) -> usize {
-        1024
-    }
-
-    fn handle_message(&self, sender: &PeerId<Self::Identity>, msg: Vec<u8>) {
-        let text = String::from_utf8_lossy(&msg);
-        println!("\r{}: {}", sender.identity, &*text);
-        self.show_prompt();
-    }
-
-    fn handle_new_peer(&self, id: &PeerId<Self::Identity>, _peer: &Peer) {
-        println!("\r{} joined.", id.identity);
-        self.show_prompt();
-    }
-
-    fn handle_peer_gone(&self, id: &PeerId<Self::Identity>) {
-        print!("\r{} left.", id.identity);
-        self.show_prompt();
     }
 
     fn service_name(&self) -> String {

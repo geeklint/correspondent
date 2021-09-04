@@ -7,7 +7,7 @@ use std::{
 };
 
 use {
-    futures_util::StreamExt,
+    futures_util::{Stream, StreamExt},
     quinn::{
         Certificate, CertificateChain, ClientConfig, ClientConfigBuilder,
         Connecting, Connection, Endpoint, NewConnection, PrivateKey,
@@ -42,6 +42,8 @@ pub struct Socket<App: Application> {
     peers: PeerList<App::Identity>,
     active_connections: ActiveConnections,
     runtime: tokio::runtime::Handle,
+    post_event:
+        tokio::sync::mpsc::UnboundedSender<InternalEvent<App::Identity>>,
     nsd_manager: Arc<NsdManager>,
 }
 
@@ -53,6 +55,7 @@ impl<App: Application> Clone for Socket<App> {
             peers: Arc::clone(&self.peers),
             active_connections: Arc::clone(&self.active_connections),
             runtime: self.runtime.clone(),
+            post_event: self.post_event.clone(),
             nsd_manager: Arc::clone(&self.nsd_manager),
         }
     }
@@ -85,19 +88,62 @@ impl<App: Application> Socket<App> {
         let (endpoint, incoming) = builder
             .bind(&bind_addr.expect("Failed to parse known valid SockAddr"))?;
         let app2 = Arc::clone(&app);
+        let app3 = Arc::clone(&app);
         let peers = PeerList::default();
         let peers2 = Arc::clone(&peers);
         let active_connections = ActiveConnections::default();
         let active_connections2 = Arc::clone(&active_connections);
+        let (post_event, mut recv_event) =
+            tokio::sync::mpsc::unbounded_channel();
+        let mut events = Events::<App::Identity> {
+            streams: futures_util::stream::SelectAll::new(),
+        };
+        events.streams.push(Box::pin(futures_util::stream::poll_fn(
+            move |cx| recv_event.poll_recv(cx),
+        )));
+        events.streams.push(
+            incoming
+                .filter_map(move |connecting| {
+                    let app2 = Arc::clone(&app2);
+                    let peers2 = Arc::clone(&peers2);
+                    let active_connections2 = Arc::clone(&active_connections2);
+                    async move {
+                        Peer::start(
+                            connecting,
+                            app2,
+                            peers2,
+                            active_connections2,
+                        )
+                        .await
+                        .ok()
+                        .map(InternalEvent::NewStream)
+                    }
+                })
+                .boxed(),
+        );
         tokio::spawn(async move {
-            let mut incoming = incoming;
-            while let Some(connecting) = incoming.next().await {
-                tokio::spawn(Peer::start(
-                    connecting,
-                    Arc::clone(&app2),
-                    Arc::clone(&peers2),
-                    Arc::clone(&active_connections2),
-                ));
+            while let Some(event) = events.next().await {
+                match event {
+                    Event::NewPeer(peer_id, conn) => {
+                        app3.handle_new_peer(&peer_id, &Peer { conn });
+                    }
+                    Event::PeerGone(peer_id) => {
+                        app3.handle_peer_gone(&peer_id);
+                    }
+                    Event::UniStream(peer_id, stream) => {
+                        let app3 = Arc::clone(&app3);
+                        tokio::spawn(async move {
+                            app3.handle_message(
+                                &peer_id,
+                                stream
+                                    .read_to_end(app3.max_message_size())
+                                    .await
+                                    .ok()?,
+                            );
+                            Some(())
+                        });
+                    }
+                }
             }
         });
         let temp = Self {
@@ -106,6 +152,7 @@ impl<App: Application> Socket<App> {
             peers,
             active_connections,
             runtime: tokio::runtime::Handle::current(),
+            post_event,
             // pass a socket with an empty nsd mananger into the nsd mananger,
             // so as to avoid circular references
             nsd_manager: Arc::new(NsdManager::empty()),
@@ -136,13 +183,16 @@ impl<App: Application> Socket<App> {
     ) -> Result<(), PeerNotConnected> {
         let hostname = self.app.identity_to_dns(&identity);
         if let Ok(connecting) = self.endpoint.connect(&addr, &hostname) {
-            Peer::start(
-                connecting,
-                Arc::clone(&self.app),
-                Arc::clone(&self.peers),
-                Arc::clone(&self.active_connections),
-            )
-            .await
+            let _ = self.post_event.send(InternalEvent::NewStream(
+                Peer::start(
+                    connecting,
+                    Arc::clone(&self.app),
+                    Arc::clone(&self.peers),
+                    Arc::clone(&self.active_connections),
+                )
+                .await?,
+            ));
+            Ok(())
         } else {
             Err(PeerNotConnected)
         }
@@ -213,6 +263,48 @@ impl<App: Application> Socket<App> {
     }
 }
 
+enum Event<Id> {
+    NewPeer(PeerId<Id>, quinn::Connection),
+    PeerGone(PeerId<Id>),
+    UniStream(PeerId<Id>, quinn::RecvStream),
+}
+
+type InternalEventStream<Id> =
+    futures_util::stream::BoxStream<'static, InternalEvent<Id>>;
+
+enum InternalEvent<Id> {
+    Event(Event<Id>),
+    NewStream(InternalEventStream<Id>),
+}
+
+struct Events<Id> {
+    streams: futures_util::stream::SelectAll<InternalEventStream<Id>>,
+}
+
+impl<Id> Stream for Events<Id> {
+    type Item = Event<Id>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll::*;
+        let this = self.get_mut();
+        loop {
+            match std::pin::Pin::new(&mut this.streams).poll_next(cx) {
+                Pending => return Pending,
+                Ready(None) => return Ready(None),
+                Ready(Some(InternalEvent::Event(event))) => {
+                    return Ready(Some(event));
+                }
+                Ready(Some(InternalEvent::NewStream(stream))) => {
+                    this.streams.push(stream);
+                }
+            }
+        }
+    }
+}
+
 /// Error returned by Socket::connect if an error happens when connecting to
 /// a peer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -237,7 +329,7 @@ impl Peer {
         app: Arc<App>,
         peer_list: PeerList<App::Identity>,
         active_connections: ActiveConnections,
-    ) -> Result<(), PeerNotConnected> {
+    ) -> Result<InternalEventStream<App::Identity>, PeerNotConnected> {
         let NewConnection {
             connection,
             mut uni_streams,
@@ -251,7 +343,7 @@ impl Peer {
             // this might be vulnerable to a race condition where peers resolve
             // connections in the opposite order and both get closed, but idk
             // if that will happen often enough in practice to matter
-            return Ok(());
+            return Ok(futures_util::stream::empty().boxed());
         }
         async fn hello_timeout<T>(
             fut: impl Future<Output = Result<T, PeerNotConnected>>,
@@ -289,36 +381,54 @@ impl Peer {
             identity: hello.clone(),
             unique: connection.stable_id(),
         };
-        let peer = Self {
-            conn: connection.clone(),
-        };
-        app.handle_new_peer(&peer_id, &peer);
-        peer_list
-            .lock()
-            .await
-            .insert(hello.clone(), connection.clone());
-        while let Some(Ok(stream)) = uni_streams.next().await {
-            let app = Arc::clone(&app);
+
+        use crate::util::insert::StreamInsertExt;
+
+        Ok(futures_util::stream::once({
             let peer_id = peer_id.clone();
-            tokio::spawn(async move {
-                if let Ok(msg) =
-                    stream.read_to_end(app.max_message_size()).await
+            let connection = connection.clone();
+            futures_util::future::lazy(|_cx| {
+                InternalEvent::Event(Event::NewPeer(peer_id, connection))
+            })
+        })
+        .insert_boxed({
+            let hello = hello.clone();
+            let connection = connection.clone();
+            let peer_list = Arc::clone(&peer_list);
+            async move {
+                peer_list.lock().await.insert(hello, connection);
+            }
+        })
+        .chain({
+            let peer_id = peer_id.clone();
+            uni_streams.scan((), move |(), maybe_stream| {
+                let item = match maybe_stream {
+                    Ok(stream) => Some(InternalEvent::Event(
+                        Event::UniStream(peer_id.clone(), stream),
+                    )),
+                    Err(_) => None,
+                };
+                async { item }
+            })
+        })
+        .insert_boxed({
+            let connection = connection.clone();
+            async move {
+                peer_list.lock().await.remove(hello, &connection);
+                if !active_connections
+                    .lock()
+                    .await
+                    .remove(&ConnectionIdentity(connection.clone()))
                 {
-                    app.handle_message(&peer_id, msg);
+                    //eprintln!("failed to remove connection from active_connections");
                 }
-            });
-        }
-        peer_list.lock().await.remove(hello, &connection);
-        if !active_connections
-            .lock()
-            .await
-            .remove(&ConnectionIdentity(connection.clone()))
-        {
-            //eprintln!("failed to remove connection from active_connections");
-        }
-        app.handle_peer_gone(&peer_id);
-        std::mem::drop(connection);
-        Ok(())
+            }
+        })
+        .chain(futures_util::stream::once(async move {
+            InternalEvent::Event(Event::PeerGone(peer_id.clone()))
+        }))
+        .insert_fn(|_cx| std::mem::drop(connection))
+        .boxed())
     }
 }
 

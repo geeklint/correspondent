@@ -17,6 +17,7 @@
 //!
 //! | Operating System | Service          |
 //! | ---------------- |:----------------:|
+//! | Windows 10       | Dnsapi.dll       |
 //! | Linux            | Avahi (via dbus) |
 
 #![warn(missing_docs)]

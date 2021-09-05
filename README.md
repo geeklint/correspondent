@@ -15,5 +15,5 @@ to discover peers on the local network.
 
 | Operating System | Service          |
 | ---------------- |:----------------:|
+| Windows 10       | Dnsapi.dll       |
 | Linux            | Avahi (via dbus) |
-

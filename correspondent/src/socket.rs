@@ -202,6 +202,36 @@ impl<App: Application> Socket<App> {
         Err(PeerNotConnected)
     }
 
+    /// Open a unidirectional stream to a specific peer
+    pub async fn open_uni(
+        &self,
+        target: PeerId<App::Identity>,
+    ) -> Result<quinn::SendStream, PeerNotConnected> {
+        let peers = Arc::clone(&self.peers);
+        let connection = {
+            let guard = peers.lock().await;
+            guard
+                .get_connection(target.identity, target.unique)
+                .ok_or(PeerNotConnected)?
+        };
+        connection.open_uni().await.map_err(|_e| PeerNotConnected)
+    }
+
+    /// Open a bidirectional stream to a specific peer
+    pub async fn open_bi(
+        &self,
+        target: PeerId<App::Identity>,
+    ) -> Result<(quinn::SendStream, quinn::RecvStream), PeerNotConnected> {
+        let peers = Arc::clone(&self.peers);
+        let connection = {
+            let guard = peers.lock().await;
+            guard
+                .get_connection(target.identity, target.unique)
+                .ok_or(PeerNotConnected)?
+        };
+        connection.open_bi().await.map_err(|_e| PeerNotConnected)
+    }
+
     /// Send a message to all connected peers with the specified identity
     pub fn send_to(&self, target: App::Identity, msg: Vec<u8>) {
         let peers = Arc::clone(&self.peers);
@@ -255,6 +285,8 @@ pub enum Event<Id> {
     PeerGone(PeerId<Id>),
     /// Fired when a peer opens a new unidirectional stream
     UniStream(PeerId<Id>, quinn::RecvStream),
+    /// Fired when a peer opens a new bidirectional stream
+    BiStream(PeerId<Id>, quinn::SendStream, quinn::RecvStream),
 }
 
 type InternalEventStream<Id> =
@@ -322,6 +354,7 @@ impl Peer {
         let NewConnection {
             connection,
             mut uni_streams,
+            bi_streams,
             ..
         } = connecting.await.map_err(|_e| PeerNotConnected)?;
         if !active_connections
@@ -389,16 +422,28 @@ impl Peer {
             }
         })
         .chain({
-            let peer_id = peer_id.clone();
-            uni_streams.scan((), move |(), maybe_stream| {
-                let item = match maybe_stream {
-                    Ok(stream) => Some(InternalEvent::Event(
-                        Event::UniStream(peer_id.clone(), stream),
-                    )),
-                    Err(_) => None,
-                };
-                async { item }
-            })
+            let peer_id_uni = peer_id.clone();
+            let peer_id_bi = peer_id.clone();
+            futures_util::stream::select(
+                uni_streams.scan((), move |(), maybe_stream| {
+                    let item = match maybe_stream {
+                        Ok(stream) => Some(InternalEvent::Event(
+                            Event::UniStream(peer_id_uni.clone(), stream),
+                        )),
+                        Err(_) => None,
+                    };
+                    async { item }
+                }),
+                bi_streams.scan((), move |(), maybe_stream| {
+                    let item = match maybe_stream {
+                        Ok((send, recv)) => Some(InternalEvent::Event(
+                            Event::BiStream(peer_id_bi.clone(), send, recv),
+                        )),
+                        Err(_) => None,
+                    };
+                    async { item }
+                }),
+            )
         })
         .insert_boxed({
             let connection = connection.clone();

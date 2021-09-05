@@ -130,6 +130,9 @@ async fn network_thread(
                     }
                 });
             }
+            Event::BiStream(..) => {
+                // TODO: support bi streams in ffi?
+            }
         }
     }
 }

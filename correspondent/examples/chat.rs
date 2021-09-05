@@ -74,6 +74,9 @@ async fn main() {
                             }
                         });
                     }
+                    Event::BiStream(..) => {
+                        // not used
+                    }
                 }
             }
         })

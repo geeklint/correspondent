@@ -144,6 +144,7 @@ impl<App: Application> Socket<App> {
         ))
     }
 
+    /// Access the internal endpoint object.
     pub fn endpoint(&self) -> &quinn::Endpoint {
         &self.endpoint
     }
@@ -246,9 +247,13 @@ impl<App: Application> Socket<App> {
     }
 }
 
+/// A network event on the correspondent Socket
 pub enum Event<Id> {
+    /// Fired when a new peer has connected
     NewPeer(PeerId<Id>, quinn::Connection),
+    /// Fired when a peer has disconnected
     PeerGone(PeerId<Id>),
+    /// Fired when a peer opens a new unidirectional stream
     UniStream(PeerId<Id>, quinn::RecvStream),
 }
 
@@ -260,6 +265,7 @@ enum InternalEvent<Id> {
     NewStream(InternalEventStream<Id>),
 }
 
+/// Stream of events happening on the correspondent Socket
 pub struct Events<Id> {
     streams: futures_util::stream::SelectAll<InternalEventStream<Id>>,
 }

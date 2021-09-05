@@ -249,6 +249,51 @@ pub struct Application {
     vtable: ApplicationVTable,
 }
 
+impl Application {
+    pub(crate) fn max_message_size(&self) -> usize {
+        self.vtable.max_message_size
+    }
+
+    pub(crate) fn handle_message(
+        &self,
+        sender: &PeerIdInternal,
+        msg: Vec<u8>,
+    ) {
+        let identity: &[u8] = sender.identity.as_bytes();
+        let peer_id = PeerId {
+            identity: identity.as_ptr(),
+            identity_len: identity.len(),
+            unique: sender.unique,
+        };
+        (self.vtable.handle_message)(
+            self.vtable.obj,
+            &peer_id,
+            msg.as_ptr(),
+            msg.len(),
+        );
+    }
+
+    pub(crate) fn handle_new_peer(&self, id: &PeerIdInternal) {
+        let identity: &[u8] = id.identity.as_bytes();
+        let peer_id = PeerId {
+            identity: identity.as_ptr(),
+            identity_len: identity.len(),
+            unique: id.unique,
+        };
+        (self.vtable.handle_new_peer)(self.vtable.obj, &peer_id);
+    }
+
+    pub(crate) fn handle_peer_gone(&self, peer: &PeerIdInternal) {
+        let identity: &[u8] = peer.identity.as_bytes();
+        let peer_id = PeerId {
+            identity: identity.as_ptr(),
+            identity_len: identity.len(),
+            unique: peer.unique,
+        };
+        (self.vtable.handle_peer_gone)(self.vtable.obj, &peer_id);
+    }
+}
+
 macro_rules! vtable_string {
     ($vtable:expr, $field:ident, $len:ident) => {{
         assert!(!$vtable.$field.is_null());
@@ -291,10 +336,6 @@ impl correspondent::Application for Application {
         string.into_owned().into()
     }
 
-    fn max_message_size(&self) -> usize {
-        self.vtable.max_message_size
-    }
-
     fn service_name(&self) -> String {
         vtable_string!(self.vtable, service_name, service_name_len)
     }
@@ -332,44 +373,5 @@ impl correspondent::Application for Application {
             Box::into_raw(ctx),
         );
         recv
-    }
-
-    fn handle_message(&self, sender: &PeerIdInternal, msg: Vec<u8>) {
-        let identity: &[u8] = sender.identity.as_bytes();
-        let peer_id = PeerId {
-            identity: identity.as_ptr(),
-            identity_len: identity.len(),
-            unique: sender.unique,
-        };
-        (self.vtable.handle_message)(
-            self.vtable.obj,
-            &peer_id,
-            msg.as_ptr(),
-            msg.len(),
-        );
-    }
-
-    fn handle_new_peer(
-        &self,
-        id: &PeerIdInternal,
-        _peer: &correspondent::Peer,
-    ) {
-        let identity: &[u8] = id.identity.as_bytes();
-        let peer_id = PeerId {
-            identity: identity.as_ptr(),
-            identity_len: identity.len(),
-            unique: id.unique,
-        };
-        (self.vtable.handle_new_peer)(self.vtable.obj, &peer_id);
-    }
-
-    fn handle_peer_gone(&self, peer: &PeerIdInternal) {
-        let identity: &[u8] = peer.identity.as_bytes();
-        let peer_id = PeerId {
-            identity: identity.as_ptr(),
-            identity_len: identity.len(),
-            unique: peer.unique,
-        };
-        (self.vtable.handle_peer_gone)(self.vtable.obj, &peer_id);
     }
 }

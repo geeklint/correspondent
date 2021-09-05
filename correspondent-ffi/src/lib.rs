@@ -144,6 +144,29 @@ pub unsafe extern "C" fn socket_send_to_all(
     }
 }
 
+/// Close a socket, informing all peers that we are gone.
+///
+/// # Safety
+///
+/// `socket` must point to a valid socket previously returned from a call to
+/// [`start`].  `msg` must point to a valid allocation of at least
+/// `msg_len` bytes.  `msg` is not used after this function returns;
+/// the caller must clean it up.
+///
+/// This function does not cleanup the socket resources, it only closes the
+/// active network connections. To avoid a memory leak you must still call
+/// [`socket_free`] after this function.
+pub unsafe extern "C" fn socket_close(
+    socket: *mut Socket,
+    code: u32,
+    msg: *const u8,
+    msg_len: usize,
+) {
+    if !socket.is_null() {
+        (&*socket).close(code, msg, msg_len);
+    }
+}
+
 /// Cleanup a socket
 ///
 /// # Safety

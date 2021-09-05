@@ -3,10 +3,8 @@
 
 use std::{error::Error, future::Future, hash::Hash, path::PathBuf};
 
-use crate::socket::{Peer, PeerId};
-
 /// The Application trait is the primary way to configure a correspondent
-/// socket, and respond to network events.
+/// socket.
 ///
 /// There are two important things an application must define: an "identity"
 /// and a method for signing TLS certificates.

@@ -6,14 +6,11 @@ use std::sync::{
     Arc,
 };
 
-use tokio::sync::oneshot;
-
 use crate::application::{Application, ApplicationVTable};
 
 /// Representation of a correspondent socket.
 pub struct Socket {
     inner: correspondent::Socket<Application>,
-    _handle: oneshot::Sender<()>,
 }
 
 impl Socket {
@@ -65,6 +62,19 @@ impl Socket {
         let msg_bytes = std::slice::from_raw_parts(msg, msg_len);
         self.inner.send_to_all(msg_bytes.to_vec());
     }
+
+    pub(crate) unsafe fn close(
+        &self,
+        code: u32,
+        msg: *const u8,
+        msg_len: usize,
+    ) {
+        if msg.is_null() {
+            return;
+        }
+        let msg_bytes = std::slice::from_raw_parts(msg, msg_len);
+        self.inner.endpoint().close(code.into(), msg_bytes);
+    }
 }
 
 pub unsafe fn start(app: *const ApplicationVTable) -> *mut Socket {
@@ -77,30 +87,49 @@ pub unsafe fn start(app: *const ApplicationVTable) -> *mut Socket {
     }
     let app = Application::from(app);
     let (send, recv) = channel();
-    let (_handle, pending) = oneshot::channel();
     std::thread::spawn(move || {
-        network_thread(app, send, pending);
+        network_thread(app, send);
     });
     recv.recv()
         .map(|inner| {
-            let socket = Socket { inner, _handle };
+            let socket = Socket { inner };
             Box::into_raw(Box::new(socket))
         })
         .unwrap_or(std::ptr::null_mut())
 }
 
-// clippy bug: https://github.com/rust-lang/rust-clippy/issues/7438
-#[allow(clippy::semicolon_if_nothing_returned)]
 #[tokio::main]
 async fn network_thread(
     app: Application,
     sender: Sender<correspondent::Socket<Application>>,
-    pending: oneshot::Receiver<()>,
 ) {
-    let socket = match correspondent::Socket::start(Arc::new(app)).await {
-        Ok(socket) => socket,
-        Err(_) => return,
-    };
+    use futures_util::StreamExt;
+    let app = Arc::new(app);
+    let (socket, mut events) =
+        match correspondent::Socket::start(Arc::clone(&app)).await {
+            Ok(socket) => socket,
+            Err(_) => return,
+        };
     let _ = sender.send(socket);
-    let _ = pending.await;
+    while let Some(event) = events.next().await {
+        use correspondent::Event;
+        match event {
+            Event::NewPeer(peer_id, _connection) => {
+                app.handle_new_peer(&peer_id);
+            }
+            Event::PeerGone(peer_id) => {
+                app.handle_peer_gone(&peer_id);
+            }
+            Event::UniStream(peer_id, stream) => {
+                let app = Arc::clone(&app);
+                tokio::spawn(async move {
+                    if let Ok(message) =
+                        stream.read_to_end(app.max_message_size()).await
+                    {
+                        app.handle_message(&peer_id, message);
+                    }
+                });
+            }
+        }
+    }
 }

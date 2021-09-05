@@ -25,7 +25,7 @@ use crate::{
 /// Unique identifier for a connection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PeerId<T> {
-    /// Identity advertized by the peer
+    /// Identity advertised by the peer
     pub identity: T,
 
     /// A unique identifier for the connection

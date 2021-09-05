@@ -592,9 +592,7 @@ fn configure_client(
     cfg.add_certificate_authority(ca_cert)?;
     let trans_cfg =
         Arc::get_mut(&mut cfg.transport).expect("Arc::get_mut failed");
-    trans_cfg
-        .keep_alive_interval(Some(Duration::from_secs(1)))
-        .max_concurrent_bidi_streams(0)?;
+    trans_cfg.keep_alive_interval(Some(Duration::from_secs(1)));
     Ok(cfg)
 }
 
@@ -603,10 +601,7 @@ fn configure_server(
 ) -> Result<ServerConfig, Box<dyn Error>> {
     let priv_key = PrivateKey::from_der(&cert.priv_key_der)?;
     let chain = CertificateChain::from_pem(cert.chain_pem.as_ref())?;
-    let mut transport_config = TransportConfig::default();
-    transport_config.max_concurrent_bidi_streams(0)?;
     let mut server_config = ServerConfig::default();
-    server_config.transport = Arc::new(transport_config);
     let mut allowed_client_signers = rustls::RootCertStore::empty();
     allowed_client_signers
         .add_pem_file(&mut cert.authority_pem.as_ref())

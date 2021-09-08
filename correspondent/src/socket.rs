@@ -117,7 +117,7 @@ impl<App: Application> Socket<App> {
                         )
                         .await
                         .ok()
-                        .map(InternalEvent::NewStream)
+                        .map(|(_pid, stream)| InternalEvent::NewStream(stream))
                     }
                 })
                 .boxed(),
@@ -164,19 +164,18 @@ impl<App: Application> Socket<App> {
         &self,
         addr: SocketAddr,
         identity: App::Identity,
-    ) -> Result<(), PeerNotConnected> {
+    ) -> Result<PeerId<App::Identity>, PeerNotConnected> {
         let hostname = self.app.identity_to_dns(&identity);
         if let Ok(connecting) = self.endpoint.connect(&addr, &hostname) {
-            let _ = self.post_event.send(InternalEvent::NewStream(
-                Peer::start(
-                    connecting,
-                    Arc::clone(&self.app),
-                    Arc::clone(&self.peers),
-                    Arc::clone(&self.active_connections),
-                )
-                .await?,
-            ));
-            Ok(())
+            let (peer_id, stream) = Peer::start(
+                connecting,
+                Arc::clone(&self.app),
+                Arc::clone(&self.peers),
+                Arc::clone(&self.active_connections),
+            )
+            .await?;
+            let _ = self.post_event.send(InternalEvent::NewStream(stream));
+            Ok(peer_id)
         } else {
             Err(PeerNotConnected)
         }
@@ -350,13 +349,17 @@ impl Peer {
         app: Arc<App>,
         peer_list: PeerList<App::Identity>,
         active_connections: ActiveConnections,
-    ) -> Result<InternalEventStream<App::Identity>, PeerNotConnected> {
+    ) -> Result<
+        (PeerId<App::Identity>, InternalEventStream<App::Identity>),
+        PeerNotConnected,
+    > {
         let NewConnection {
             connection,
             mut uni_streams,
             bi_streams,
             ..
         } = connecting.await.map_err(|_e| PeerNotConnected)?;
+        /*
         if !active_connections
             .lock()
             .await
@@ -367,6 +370,7 @@ impl Peer {
             // if that will happen often enough in practice to matter
             return Ok(futures_util::stream::empty().boxed());
         }
+        */
         async fn hello_timeout<T>(
             fut: impl Future<Output = Result<T, PeerNotConnected>>,
         ) -> Result<T, PeerNotConnected> {
@@ -406,63 +410,70 @@ impl Peer {
 
         use crate::util::insert::StreamInsertExt;
 
-        Ok(futures_util::stream::once({
-            let peer_id = peer_id.clone();
-            let connection = connection.clone();
-            futures_util::future::lazy(|_cx| {
-                InternalEvent::Event(Event::NewPeer(peer_id, connection))
+        Ok((
+            peer_id.clone(),
+            futures_util::stream::once({
+                let peer_id = peer_id.clone();
+                let connection = connection.clone();
+                futures_util::future::lazy(|_cx| {
+                    InternalEvent::Event(Event::NewPeer(peer_id, connection))
+                })
             })
-        })
-        .insert_boxed({
-            let hello = hello.clone();
-            let connection = connection.clone();
-            let peer_list = Arc::clone(&peer_list);
-            async move {
-                peer_list.lock().await.insert(hello, connection);
-            }
-        })
-        .chain({
-            let peer_id_uni = peer_id.clone();
-            let peer_id_bi = peer_id.clone();
-            futures_util::stream::select(
-                uni_streams.scan((), move |(), maybe_stream| {
-                    let item = match maybe_stream {
-                        Ok(stream) => Some(InternalEvent::Event(
-                            Event::UniStream(peer_id_uni.clone(), stream),
-                        )),
-                        Err(_) => None,
-                    };
-                    async { item }
-                }),
-                bi_streams.scan((), move |(), maybe_stream| {
-                    let item = match maybe_stream {
-                        Ok((send, recv)) => Some(InternalEvent::Event(
-                            Event::BiStream(peer_id_bi.clone(), send, recv),
-                        )),
-                        Err(_) => None,
-                    };
-                    async { item }
-                }),
-            )
-        })
-        .insert_boxed({
-            let connection = connection.clone();
-            async move {
-                peer_list.lock().await.remove(hello, &connection);
-                if !active_connections
-                    .lock()
-                    .await
-                    .remove(&ConnectionIdentity(connection.clone()))
-                {
-                    //eprintln!("failed to remove connection from active_connections");
+            .insert_boxed({
+                let hello = hello.clone();
+                let connection = connection.clone();
+                let peer_list = Arc::clone(&peer_list);
+                async move {
+                    peer_list.lock().await.insert(hello, connection);
                 }
-            }
-        })
-        .chain(futures_util::stream::once(async move {
-            InternalEvent::Event(Event::PeerGone(peer_id.clone()))
-        }))
-        .insert_fn(|_cx| std::mem::drop(connection))
-        .boxed())
+            })
+            .chain({
+                let peer_id_uni = peer_id.clone();
+                let peer_id_bi = peer_id.clone();
+                futures_util::stream::select(
+                    uni_streams.scan((), move |(), maybe_stream| {
+                        let item = match maybe_stream {
+                            Ok(stream) => Some(InternalEvent::Event(
+                                Event::UniStream(peer_id_uni.clone(), stream),
+                            )),
+                            Err(_) => None,
+                        };
+                        async { item }
+                    }),
+                    bi_streams.scan((), move |(), maybe_stream| {
+                        let item = match maybe_stream {
+                            Ok((send, recv)) => {
+                                Some(InternalEvent::Event(Event::BiStream(
+                                    peer_id_bi.clone(),
+                                    send,
+                                    recv,
+                                )))
+                            }
+                            Err(_) => None,
+                        };
+                        async { item }
+                    }),
+                )
+            })
+            .insert_boxed({
+                let connection = connection.clone();
+                async move {
+                    peer_list.lock().await.remove(hello, &connection);
+                    if !active_connections
+                        .lock()
+                        .await
+                        .remove(&ConnectionIdentity(connection.clone()))
+                    {
+                        //eprintln!("failed to remove connection from active_connections");
+                    }
+                }
+            })
+            .chain(futures_util::stream::once(async move {
+                InternalEvent::Event(Event::PeerGone(peer_id.clone()))
+            }))
+            .insert_fn(|_cx| std::mem::drop(connection))
+            .boxed(),
+        ))
     }
 }
 

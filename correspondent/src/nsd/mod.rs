@@ -20,8 +20,17 @@ mod platform;
 #[derive(Clone, Debug)]
 pub struct PeerEntry<T> {
     pub identity: T,
+    pub instance_id: u64,
     pub port: u16,
     pub addresses: Vec<IpAddr>,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub struct FoundPeer<T> {
+    identity: T,
+    instance_id: u64,
+    hostname: String,
+    port: u16,
 }
 
 pub type NsdManager = NsdManagerGeneric<platform::NsdManager>;
@@ -58,15 +67,16 @@ impl<Plat> NsdManagerGeneric<Plat> {
         let new_peers = Arc::new(NewPeers::default());
         let proxy_peer_found = {
             let new_peers = Arc::clone(&new_peers);
-            move |identity, host, ip, port| {
+            move |found_peer, ip| {
                 let new_peers = Arc::clone(&new_peers);
                 async move {
                     let mut guard = new_peers.found.lock().await;
-                    guard.entry((host, port, identity)).or_default().push(ip);
+                    guard.entry(found_peer).or_default().push(ip);
                     new_peers.notify.notify_one();
                 }
             }
         };
+        let instance_id = socket.instance_id();
         let app = Arc::clone(socket.app());
         let sleep_time = Duration::from_millis(100);
         let main = async move {
@@ -76,33 +86,27 @@ impl<Plat> NsdManagerGeneric<Plat> {
                     _ = &mut alive => { break; },
                 );
                 sleep(sleep_time).await;
-                for ((_host, port, identity), mut addresses) in
+                for (found_peer, mut addresses) in
                     new_peers.found.lock().await.drain()
                 {
                     let socket = socket.clone();
                     addresses.sort_unstable_by(|a, b| b.cmp(a));
                     tokio::spawn(async move {
-                        let res = socket
+                        let _ = socket
                             .connect_local(PeerEntry {
-                                identity,
-                                port,
+                                identity: found_peer.identity,
+                                instance_id: found_peer.instance_id,
+                                port: found_peer.port,
                                 addresses,
                             })
                             .await;
-                        if res.is_err() {
-                            /*
-                            eprintln!(
-                                "failed to connect to {}:{}",
-                                host, port,
-                            );
-                            */
-                        }
                     });
                 }
             }
         };
         Self {
             _plat: Plat::start(
+                instance_id,
                 app,
                 None, // TODO: handle non-wildcard?
                 port,
@@ -116,6 +120,7 @@ impl<Plat> NsdManagerGeneric<Plat> {
 
 pub trait Interface<App: crate::application::Application>: Sized {
     fn start<Found, FoundFut, Main>(
+        instance_id: u64,
         app: Arc<App>,
         bind_addr: Option<IpAddr>,
         port: u16,
@@ -126,14 +131,14 @@ pub trait Interface<App: crate::application::Application>: Sized {
         Found: 'static
             + Send
             + Sync
-            + Fn(App::Identity, String, IpAddr, u16) -> FoundFut,
+            + Fn(FoundPeer<App::Identity>, IpAddr) -> FoundFut,
         FoundFut: Send + Sync + Future<Output = ()>,
         Main: 'static + Send + Sync + Future<Output = ()>;
 }
 
 struct NewPeers<Id> {
     notify: Notify,
-    found: Mutex<HashMap<(String, u16, Id), Vec<IpAddr>>>,
+    found: Mutex<HashMap<FoundPeer<Id>, Vec<IpAddr>>>,
 }
 
 impl<Id> Default for NewPeers<Id> {

@@ -14,6 +14,7 @@ use super::bindings::Windows::Win32::{
 };
 
 pub(super) fn create_service<App: crate::application::Application>(
+    instance_id: u64,
     app: &App,
     port: u16,
     _bind_addr: Option<IpAddr>,
@@ -29,7 +30,8 @@ pub(super) fn create_service<App: crate::application::Application>(
 
     let id_value = app.identity_to_txt(app.identity());
     let id_value = std::str::from_utf8(&id_value).ok()?;
-    let txt_pairs = [("id", id_value)];
+    let ins_value = format!("{:x}", instance_id);
+    let txt_pairs = [("id", id_value), ("ins", &ins_value)];
     let service_instance =
         construct_instance(&service_name, &hostname, port, &txt_pairs)?;
     let complete_flag = Box::leak(Box::new(AtomicBool::new(false)));

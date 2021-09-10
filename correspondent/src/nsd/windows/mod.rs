@@ -29,6 +29,7 @@ where
     App: crate::application::Application,
 {
     fn start<Found, FoundFut, Main>(
+        instance_id: u64,
         app: Arc<App>,
         bind_addr: Option<IpAddr>,
         port: u16,
@@ -39,11 +40,11 @@ where
         Found: 'static
             + Send
             + Sync
-            + Fn(App::Identity, String, IpAddr, u16) -> FoundFut,
+            + Fn(super::FoundPeer<App::Identity>, IpAddr) -> FoundFut,
         FoundFut: Send + Sync + Future<Output = ()>,
         Main: 'static + Send + Sync + Future<Output = ()>,
     {
-        let _deregister = create_service(&*app, port, bind_addr);
+        let _deregister = create_service(instance_id, &*app, port, bind_addr);
         let _cancel_browse = browse_services(app, peer_found);
         tokio::spawn(main);
         Some(Self {

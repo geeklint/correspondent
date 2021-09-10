@@ -21,7 +21,7 @@ where
     Found: 'static
         + Send
         + Sync
-        + Fn(App::Identity, String, IpAddr, u16) -> FoundFut,
+        + Fn(super::super::FoundPeer<App::Identity>, IpAddr) -> FoundFut,
     FoundFut: Send + Sync + Future<Output = ()>,
 {
     let browse_context: Box<Arc<dyn BrowsingContext>> =
@@ -157,7 +157,7 @@ where
     Found: 'static
         + Send
         + Sync
-        + Fn(App::Identity, String, IpAddr, u16) -> FoundFut,
+        + Fn(super::super::FoundPeer<App::Identity>, IpAddr) -> FoundFut,
     FoundFut: Send + Sync + Future<Output = ()>,
 {
     unsafe fn do_spawn(self: Arc<Self>, instance: &Dns::DNS_SERVICE_INSTANCE) {
@@ -176,26 +176,33 @@ where
         let keys = std::slice::from_raw_parts(instance.keys, props_len);
         let values = std::slice::from_raw_parts(instance.values, props_len);
         let id_key = [b'i'.into(), b'd'.into(), 0];
-        let identity = match keys
-            .iter()
-            .copied()
-            .zip(values.iter().copied())
-            .find_map(|(key, value)| {
-                super::utf16_null_equals(&id_key, key.0)
-                    .then(|| super::utf16_null_to_string(value.0))
-            })
-            .and_then(|s| self.app.identity_from_txt(s.as_bytes()))
-        {
-            Some(id) => id,
-            None => {
-                return;
+        let ins_key = [b'i'.into(), b'n'.into(), b's'.into(), 0];
+        let mut identity = None;
+        let mut instance = None;
+        for (key, value) in keys.iter().copied().zip(values.iter().copied()) {
+            if super::utf16_null_equals(&id_key, key.0) {
+                let id_str = super::utf16_null_to_string(value.0);
+                identity = self.app.identity_from_txt(id_str.as_bytes());
+            } else if super::utf16_null_equals(&ins_key, key.0) {
+                let ins_str = super::utf16_null_to_string(value.0);
+                instance = u64::from_str_radix(&ins_str, 16).ok();
             }
+        }
+        let (identity, instance_id) = match (identity, instance) {
+            (Some(id), Some(ins)) => (id, ins),
+            _ => return,
         };
         // no ipv6 on Windows because of dual-stack things
         if let Some(ip_addr) = ipv4 {
             let ctx = Arc::clone(&self);
+            let found_peer = super::super::FoundPeer {
+                hostname: host,
+                identity,
+                instance_id,
+                port,
+            };
             self.handle.spawn(async move {
-                (ctx.peer_found)(identity, host, ip_addr, port).await;
+                (ctx.peer_found)(found_peer, ip_addr).await;
             });
         }
     }

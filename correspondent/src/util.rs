@@ -154,10 +154,7 @@ pub async fn write(path: &Path, data: &[u8]) -> std::io::Result<()> {
 }
 
 pub mod insert {
-    use futures_util::{
-        future::{lazy, Lazy},
-        stream::{Chain, Stream, StreamExt},
-    };
+    use futures_util::stream::{Chain, Stream, StreamExt};
     use std::{
         future::Future,
         marker::{PhantomData, Unpin},
@@ -174,11 +171,6 @@ pub mod insert {
     impl<F, T> Insert<Pin<Box<F>>, T> {
         pub fn new_boxed(fut: F) -> Self {
             Self::new(Box::pin(fut))
-        }
-    }
-    impl<F: FnOnce(&mut Context<'_>), T> Insert<Lazy<F>, T> {
-        pub fn new_fn(fun: F) -> Self {
-            Self::new(lazy(fun))
         }
     }
     impl<T, F: Future<Output = ()> + Unpin> Stream for Insert<F, T> {
@@ -207,13 +199,6 @@ pub mod insert {
             fut: F,
         ) -> Chain<Self, Insert<Pin<Box<F>>, Self::Item>> {
             self.chain(Insert::new_boxed(fut))
-        }
-
-        fn insert_fn<F: FnOnce(&mut Context<'_>)>(
-            self,
-            fun: F,
-        ) -> Chain<Self, Insert<Lazy<F>, Self::Item>> {
-            self.chain(Insert::new_fn(fun))
         }
     }
 

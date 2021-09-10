@@ -2,7 +2,7 @@
 /* Copyright © 2021 Violet Leonard */
 
 use std::{
-    collections::HashSet, error::Error, future::Future, net::SocketAddr,
+    collections::HashMap, error::Error, future::Future, net::SocketAddr,
     path::Path, sync::Arc, time::Duration,
 };
 
@@ -33,14 +33,15 @@ pub struct PeerId<T> {
 }
 
 type PeerList<T> = Arc<Mutex<ConnectionSet<T>>>;
-type ActiveConnections = Arc<Mutex<HashSet<ConnectionIdentity>>>;
+type ActiveConnections<T> = Arc<Mutex<HashMap<(T, u64), Connection>>>;
 
 /// A socket handles connections and messages.
 pub struct Socket<App: Application> {
+    instance_id: u64,
     app: Arc<App>,
     endpoint: Endpoint,
     peers: PeerList<App::Identity>,
-    active_connections: ActiveConnections,
+    active_connections: ActiveConnections<App::Identity>,
     runtime: tokio::runtime::Handle,
     post_event:
         tokio::sync::mpsc::UnboundedSender<InternalEvent<App::Identity>>,
@@ -50,6 +51,7 @@ pub struct Socket<App: Application> {
 impl<App: Application> Clone for Socket<App> {
     fn clone(&self) -> Self {
         Self {
+            instance_id: self.instance_id,
             app: Arc::clone(&self.app),
             endpoint: self.endpoint.clone(),
             peers: Arc::clone(&self.peers),
@@ -77,6 +79,7 @@ impl<App: Application> Socket<App> {
     pub async fn start(
         app: Arc<App>,
     ) -> Result<(Self, Events<App::Identity>), Box<dyn Error>> {
+        let instance_id = rand::Rng::gen(&mut rand::thread_rng());
         let certificate = SocketCertificate::get(&*app).await?;
         let client_cfg = configure_client(&certificate)?;
         let server_cfg = configure_server(&certificate)?;
@@ -111,9 +114,11 @@ impl<App: Application> Socket<App> {
                     async move {
                         Peer::start(
                             connecting,
+                            instance_id,
                             app2,
                             peers2,
                             active_connections2,
+                            None,
                         )
                         .await
                         .ok()
@@ -123,6 +128,7 @@ impl<App: Application> Socket<App> {
                 .boxed(),
         );
         let temp = Self {
+            instance_id,
             app,
             endpoint,
             peers,
@@ -159,19 +165,34 @@ impl<App: Application> Socket<App> {
         &self.app
     }
 
+    pub(crate) fn instance_id(&self) -> u64 {
+        self.instance_id
+    }
+
     /// Manually connect to a specific peer
     pub async fn connect(
         &self,
         addr: SocketAddr,
         identity: App::Identity,
     ) -> Result<PeerId<App::Identity>, PeerNotConnected> {
+        self.connect2(addr, identity, None).await
+    }
+
+    async fn connect2(
+        &self,
+        addr: SocketAddr,
+        identity: App::Identity,
+        instance_id: Option<u64>,
+    ) -> Result<PeerId<App::Identity>, PeerNotConnected> {
         let hostname = self.app.identity_to_dns(&identity);
         if let Ok(connecting) = self.endpoint.connect(&addr, &hostname) {
             let (peer_id, stream) = Peer::start(
                 connecting,
+                self.instance_id,
                 Arc::clone(&self.app),
                 Arc::clone(&self.peers),
                 Arc::clone(&self.active_connections),
+                instance_id.map(|ins| (identity, ins)),
             )
             .await?;
             let _ = self.post_event.send(InternalEvent::NewStream(stream));
@@ -194,7 +215,11 @@ impl<App: Application> Socket<App> {
                 // is ourself
                 return Ok(());
             }
-            if self.connect(addr, peer.identity.clone()).await.is_ok() {
+            if self
+                .connect2(addr, peer.identity.clone(), Some(peer.instance_id))
+                .await
+                .is_ok()
+            {
                 return Ok(());
             }
         }
@@ -346,9 +371,11 @@ impl Peer {
 
     async fn start<App: Application>(
         connecting: Connecting,
+        our_instance_id: u64,
         app: Arc<App>,
         peer_list: PeerList<App::Identity>,
-        active_connections: ActiveConnections,
+        active_connections: ActiveConnections<App::Identity>,
+        peer_instance_id: Option<(App::Identity, u64)>,
     ) -> Result<
         (PeerId<App::Identity>, InternalEventStream<App::Identity>),
         PeerNotConnected,
@@ -359,18 +386,21 @@ impl Peer {
             bi_streams,
             ..
         } = connecting.await.map_err(|_e| PeerNotConnected)?;
-        /*
-        if !active_connections
-            .lock()
-            .await
-            .insert(ConnectionIdentity(connection.clone()))
-        {
-            // this might be vulnerable to a race condition where peers resolve
-            // connections in the opposite order and both get closed, but idk
-            // if that will happen often enough in practice to matter
-            return Ok(futures_util::stream::empty().boxed());
+        if let Some(instance_id) = peer_instance_id {
+            let guard = active_connections.lock().await;
+            if let Some(existing_conn) = guard.get(&instance_id) {
+                let peer_id = PeerId {
+                    identity: instance_id.0,
+                    unique: existing_conn.stable_id(),
+                };
+                // this might be vulnerable to a race condition where peers resolve
+                // connections in the opposite order and both get closed, but idk
+                // if that will happen often enough in practice to matter
+                connection
+                    .close(0_u8.into(), "correspondent: duplicate".as_bytes());
+                return Ok((peer_id, futures_util::stream::empty().boxed()));
+            }
         }
-        */
         async fn hello_timeout<T>(
             fut: impl Future<Output = Result<T, PeerNotConnected>>,
         ) -> Result<T, PeerNotConnected> {
@@ -384,29 +414,65 @@ impl Peer {
                 connection.open_uni().await.map_err(|_| PeerNotConnected)?;
             let buf = app.identity_to_txt(app.identity());
             first_stream
+                .write_all(&our_instance_id.to_be_bytes())
+                .await
+                .map_err(|_| PeerNotConnected)?;
+            first_stream
                 .write_all(&buf)
                 .await
                 .map_err(|_| PeerNotConnected)?;
             Ok(())
         });
         let recving_hello = hello_timeout(async {
-            let first_stream = match uni_streams.next().await {
+            let mut first_stream = match uni_streams.next().await {
                 Some(Ok(stream)) => stream,
                 _ => return Err(PeerNotConnected),
             };
+            let mut instance_id_bytes = [0; 8];
+            first_stream
+                .read_exact(&mut instance_id_bytes)
+                .await
+                .map_err(|_| PeerNotConnected)?;
             let buf = first_stream
                 .read_to_end(256)
                 .await
                 .map_err(|_| PeerNotConnected)?;
             let hello = app.identity_from_txt(&buf).ok_or(PeerNotConnected)?;
-            Ok(hello)
+            Ok((u64::from_be_bytes(instance_id_bytes), hello))
         });
-        let ((), hello) = tokio::try_join!(sending_hello, recving_hello)?;
+        let ((), (peer_instance_id, hello)) =
+            tokio::try_join!(sending_hello, recving_hello)?;
         verify_peer(&connection, &*app, &hello).ok_or(PeerNotConnected)?;
+
+        let peer_instance_id = (hello.clone(), peer_instance_id);
+
+        {
+            let mut guard = active_connections.lock().await;
+            if let Some(existing_conn) = guard.get(&peer_instance_id) {
+                let peer_id = PeerId {
+                    identity: peer_instance_id.0,
+                    unique: existing_conn.stable_id(),
+                };
+                // this might be vulnerable to a race condition where peers resolve
+                // connections in the opposite order and both get closed, but idk
+                // if that will happen often enough in practice to matter
+                connection
+                    .close(0_u8.into(), "correspondent: duplicate".as_bytes());
+                return Ok((peer_id, futures_util::stream::empty().boxed()));
+            } else {
+                guard.insert(peer_instance_id.clone(), connection.clone());
+            }
+        }
+
         let peer_id = PeerId {
             identity: hello.clone(),
             unique: connection.stable_id(),
         };
+
+        peer_list
+            .lock()
+            .await
+            .insert(hello.clone(), connection.clone());
 
         use crate::util::insert::StreamInsertExt;
 
@@ -418,14 +484,6 @@ impl Peer {
                 futures_util::future::lazy(|_cx| {
                     InternalEvent::Event(Event::NewPeer(peer_id, connection))
                 })
-            })
-            .insert_boxed({
-                let hello = hello.clone();
-                let connection = connection.clone();
-                let peer_list = Arc::clone(&peer_list);
-                async move {
-                    peer_list.lock().await.insert(hello, connection);
-                }
             })
             .chain({
                 let peer_id_uni = peer_id.clone();
@@ -455,60 +513,23 @@ impl Peer {
                     }),
                 )
             })
-            .insert_boxed({
-                let connection = connection.clone();
-                async move {
-                    peer_list.lock().await.remove(hello, &connection);
-                    if !active_connections
-                        .lock()
-                        .await
-                        .remove(&ConnectionIdentity(connection.clone()))
-                    {
-                        //eprintln!("failed to remove connection from active_connections");
-                    }
-                }
-            })
             .chain(futures_util::stream::once(async move {
                 InternalEvent::Event(Event::PeerGone(peer_id.clone()))
             }))
-            .insert_fn(|_cx| std::mem::drop(connection))
+            .insert_boxed({
+                let connection = connection.clone();
+                async move {
+                    let mut peer_list_guard = peer_list.lock().await;
+                    let mut active_conn_guard =
+                        active_connections.lock().await;
+                    peer_list_guard.remove(hello, &connection);
+                    active_conn_guard.remove(&peer_instance_id);
+                }
+            })
             .boxed(),
         ))
     }
 }
-
-#[derive(Clone, Debug)]
-pub struct ConnectionIdentity(Connection);
-
-impl PartialEq for ConnectionIdentity {
-    fn eq(&self, other: &Self) -> bool {
-        self.0
-            .peer_identity()
-            .as_ref()
-            .and_then(|chain| chain.iter().next())
-            .map(AsRef::<[u8]>::as_ref)
-            == other
-                .0
-                .peer_identity()
-                .as_ref()
-                .and_then(|chain| chain.iter().next())
-                .map(AsRef::<[u8]>::as_ref)
-    }
-}
-
-impl Eq for ConnectionIdentity {}
-
-impl std::hash::Hash for ConnectionIdentity {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0
-            .peer_identity()
-            .as_ref()
-            .and_then(|chain| chain.iter().next())
-            .map(AsRef::<[u8]>::as_ref)
-            .hash(state);
-    }
-}
-
 pub struct SocketCertificate {
     pub priv_key_der: Vec<u8>,
     pub chain_pem: String,

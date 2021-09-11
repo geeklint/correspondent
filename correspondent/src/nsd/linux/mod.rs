@@ -2,7 +2,8 @@
 /* Copyright © 2021 Violet Leonard */
 
 use std::{
-    borrow::Cow, future::Future, net::IpAddr, sync::Arc, time::Duration,
+    borrow::Cow, fmt::Write, future::Future, net::IpAddr, sync::Arc,
+    time::Duration,
 };
 
 use {
@@ -46,6 +47,7 @@ where
     App: crate::application::Application,
 {
     fn start<Found, FoundFut, Main>(
+        instance_id: u64,
         app: Arc<App>,
         bind_addr: Option<IpAddr>,
         port: u16,
@@ -56,7 +58,7 @@ where
         Found: 'static
             + Send
             + Sync
-            + Fn(App::Identity, String, IpAddr, u16) -> FoundFut,
+            + Fn(super::FoundPeer<App::Identity>, IpAddr) -> FoundFut,
         FoundFut: Send + Sync + Future<Output = ()>,
         Main: 'static + Send + Sync + Future<Output = ()>,
     {
@@ -77,8 +79,16 @@ where
         );
         tokio::spawn({
             async move {
-                Self::startup(app, proxy, port, bind_addr, peer_found, main)
-                    .await;
+                Self::startup(
+                    instance_id,
+                    app,
+                    proxy,
+                    port,
+                    bind_addr,
+                    peer_found,
+                    main,
+                )
+                .await;
             }
         });
         Some(Self {
@@ -89,6 +99,7 @@ where
 
 impl NsdManager {
     async fn startup<App, Found, FoundFut, Main>(
+        instance_id: u64,
         app: Arc<App>,
         proxy: Proxy<'static, Arc<SyncConnection>>,
         port: u16,
@@ -100,7 +111,7 @@ impl NsdManager {
         Found: 'static
             + Send
             + Sync
-            + Fn(App::Identity, String, IpAddr, u16) -> FoundFut,
+            + Fn(super::FoundPeer<App::Identity>, IpAddr) -> FoundFut,
         FoundFut: Send + Sync + Future<Output = ()>,
         Main: 'static + Send + Sync + Future<Output = ()>,
     {
@@ -110,7 +121,8 @@ impl NsdManager {
                 return;
             }
         }
-        let serving = create_service(&*app, &proxy, port, bind_addr).await;
+        let serving =
+            create_service(instance_id, &*app, &proxy, port, bind_addr).await;
         /*
         match &serving {
             Ok(_) => println!("registered service with avahi"),
@@ -131,6 +143,7 @@ impl NsdManager {
 }
 
 async fn create_service<App: crate::application::Application>(
+    instance_id: u64,
     app: &App,
     proxy: &Proxy<'static, Arc<SyncConnection>>,
     port: u16,
@@ -159,14 +172,24 @@ async fn create_service<App: crate::application::Application>(
         Some(ip) => Cow::Owned(ip.to_string()),
         None => Cow::Borrowed(""),
     };
+    let mut id_txt_line = b"id=".to_vec();
+    id_txt_line.extend(app.identity_to_txt(app.identity()));
+    let mut ins_txt_line = "ins=".to_string();
+    write!(&mut ins_txt_line, "{:x}", instance_id)
+        .expect("formatting an integer into a string failed");
+    let txt = vec![id_txt_line, ins_txt_line.into_bytes()];
     loop {
-        let mut txt_line = b"id=".to_vec();
-        txt_line.extend(app.identity_to_txt(app.identity()));
-        let txt = vec![txt_line];
         match group
             .add_service(
-                interface, protocol, flags, &name, type_, domain, &host, port,
-                txt,
+                interface,
+                protocol,
+                flags,
+                &name,
+                type_,
+                domain,
+                &host,
+                port,
+                txt.clone(),
             )
             .await
         {
@@ -197,7 +220,7 @@ where
     Found: 'static
         + Send
         + Sync
-        + Fn(App::Identity, String, IpAddr, u16) -> FoundFut,
+        + Fn(super::FoundPeer<App::Identity>, IpAddr) -> FoundFut,
     FoundFut: Send + Sync + Future<Output = ()>,
 {
     let interface = -1; // IF_UNSPEC
@@ -226,7 +249,7 @@ where
             tokio::spawn(async move {
                 let aproto = -1; // PROTO_UNSPEC
                 let flags = 0;
-                match proxy
+                let resolved = proxy
                     .resolve_service(
                         item_new.interface,
                         item_new.protocol,
@@ -237,33 +260,46 @@ where
                         flags,
                     )
                     .await
-                {
-                    Err(_) => (),
-                    Ok((
-                        _interface,
-                        _protocol,
-                        _name,
-                        _type_,
-                        _domain,
-                        host,
-                        _aprotocol,
-                        address,
-                        port,
-                        txt,
-                        _flags,
-                    )) => {
-                        if let Ok(ip_addr) = address.parse::<IpAddr>() {
-                            if let Some(identity) = txt
-                                .iter()
-                                .find_map(|line| line.strip_prefix(b"id="))
-                                .and_then(|t| app.identity_from_txt(t))
-                            {
-                                peer_found(identity, host, ip_addr, port)
-                                    .await;
-                            }
-                        }
+                    .ok()?;
+                let (
+                    _interface,
+                    _protocol,
+                    _name,
+                    _type_,
+                    _domain,
+                    host,
+                    _aprotocol,
+                    address,
+                    port,
+                    txt,
+                    _flags,
+                ) = resolved;
+                let ip_addr = address.parse::<IpAddr>().ok()?;
+                let mut identity = None;
+                let mut instance_id = None;
+                for txt_line in txt {
+                    if let Some(id_bytes) = txt_line.strip_prefix(b"id=") {
+                        identity = app.identity_from_txt(id_bytes);
+                    } else if let Some(ins_bytes) =
+                        txt_line.strip_prefix(b"ins=")
+                    {
+                        instance_id = std::str::from_utf8(ins_bytes)
+                            .ok()
+                            .and_then(|ins_str| {
+                                u64::from_str_radix(ins_str, 16).ok()
+                            });
                     }
                 }
+                let identity = identity?;
+                let instance_id = instance_id?;
+                let found_peer = super::FoundPeer {
+                    hostname: host,
+                    identity,
+                    instance_id,
+                    port,
+                };
+                peer_found(found_peer, ip_addr).await;
+                Some(())
             });
             true
         },

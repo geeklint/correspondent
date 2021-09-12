@@ -118,7 +118,6 @@ impl<App: Application> Socket<App> {
                             app2,
                             peers2,
                             active_connections2,
-                            None,
                         )
                         .await
                         .ok()
@@ -181,9 +180,20 @@ impl<App: Application> Socket<App> {
     async fn connect2(
         &self,
         addr: SocketAddr,
-        identity: App::Identity,
+        mut identity: App::Identity,
         instance_id: Option<u64>,
     ) -> Result<PeerId<App::Identity>, PeerNotConnected> {
+        if let Some(ins_id) = instance_id {
+            let guard = self.active_connections.lock().await;
+            let key = (identity, ins_id);
+            if let Some(existing_conn) = guard.get(&key) {
+                return Ok(PeerId {
+                    identity: key.0,
+                    unique: existing_conn.stable_id(),
+                });
+            }
+            identity = key.0;
+        }
         let hostname = self.app.identity_to_dns(&identity);
         if let Ok(connecting) = self.endpoint.connect(&addr, &hostname) {
             let (peer_id, stream) = Peer::start(
@@ -192,7 +202,6 @@ impl<App: Application> Socket<App> {
                 Arc::clone(&self.app),
                 Arc::clone(&self.peers),
                 Arc::clone(&self.active_connections),
-                instance_id.map(|ins| (identity, ins)),
             )
             .await?;
             let _ = self.post_event.send(InternalEvent::NewStream(stream));
@@ -375,7 +384,6 @@ impl Peer {
         app: Arc<App>,
         peer_list: PeerList<App::Identity>,
         active_connections: ActiveConnections<App::Identity>,
-        peer_instance_id: Option<(App::Identity, u64)>,
     ) -> Result<
         (PeerId<App::Identity>, InternalEventStream<App::Identity>),
         PeerNotConnected,
@@ -386,21 +394,6 @@ impl Peer {
             bi_streams,
             ..
         } = connecting.await.map_err(|_e| PeerNotConnected)?;
-        if let Some(instance_id) = peer_instance_id {
-            let guard = active_connections.lock().await;
-            if let Some(existing_conn) = guard.get(&instance_id) {
-                let peer_id = PeerId {
-                    identity: instance_id.0,
-                    unique: existing_conn.stable_id(),
-                };
-                // this might be vulnerable to a race condition where peers resolve
-                // connections in the opposite order and both get closed, but idk
-                // if that will happen often enough in practice to matter
-                connection
-                    .close(0_u8.into(), "correspondent: duplicate".as_bytes());
-                return Ok((peer_id, futures_util::stream::empty().boxed()));
-            }
-        }
         async fn hello_timeout<T>(
             fut: impl Future<Output = Result<T, PeerNotConnected>>,
         ) -> Result<T, PeerNotConnected> {
@@ -448,6 +441,7 @@ impl Peer {
 
         {
             let mut guard = active_connections.lock().await;
+            // TODO: replace with try_insert
             if let Some(existing_conn) = guard.get(&peer_instance_id) {
                 let peer_id = PeerId {
                     identity: peer_instance_id.0,

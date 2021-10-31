@@ -1,0 +1,37 @@
+name: Rust
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+    - uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    #- name: Clippy each feature set
+    #  run: |
+    #    cargo clippy --no-default-features
+    #    cargo clippy --no-default-features --features "std"
+    - name: Run tests
+      run: cargo test --verbose --all-features
+    - name: Validate documentation
+      run: cargo doc --no-deps
+      env:
+        RUSTDOCFLAGS: -Dwarnings
+    - name: Check formatting
+      run: cargo fmt --all -- --check

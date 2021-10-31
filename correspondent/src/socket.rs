@@ -2,16 +2,15 @@
 /* Copyright © 2021 Violet Leonard */
 
 use std::{
-    collections::HashMap, error::Error, future::Future, net::SocketAddr,
-    path::Path, sync::Arc, time::Duration,
+    collections::HashMap, convert::TryFrom, error::Error, future::Future,
+    net::SocketAddr, path::Path, sync::Arc, time::Duration,
 };
 
 use {
     futures_util::{Stream, StreamExt},
     quinn::{
-        Certificate, CertificateChain, ClientConfig, ClientConfigBuilder,
-        Connecting, Connection, Endpoint, NewConnection, PrivateKey,
-        ServerConfig, ServerConfigBuilder, TransportConfig,
+        ClientConfig, Connecting, Connection, Endpoint, NewConnection,
+        ServerConfig, TransportConfig,
     },
     tokio::{sync::Mutex, time::timeout},
 };
@@ -83,15 +82,13 @@ impl<App: Application> Socket<App> {
         let certificate = SocketCertificate::get(&*app).await?;
         let client_cfg = configure_client(&certificate)?;
         let server_cfg = configure_server(&certificate)?;
-        let mut builder = Endpoint::builder();
-        builder.default_client_config(client_cfg).listen(server_cfg);
-        let bind_addr = if cfg!(windows) {
-            "0.0.0.0:0".parse()
-        } else {
-            "[::]:0".parse()
-        };
-        let (endpoint, incoming) = builder
-            .bind(&bind_addr.expect("Failed to parse known valid SockAddr"))?;
+        let bind_addr_str = if cfg!(windows) { "0.0.0.0:0" } else { "[::]:0" };
+        let bind_addr = bind_addr_str
+            .parse()
+            .expect("Failed to parse known valid SockAddr");
+        let (mut endpoint, incoming) =
+            Endpoint::server(server_cfg, bind_addr)?;
+        endpoint.set_default_client_config(client_cfg);
         let app2 = Arc::clone(&app);
         let peers = PeerList::default();
         let peers2 = Arc::clone(&peers);
@@ -195,7 +192,7 @@ impl<App: Application> Socket<App> {
             identity = key.0;
         }
         let hostname = self.app.identity_to_dns(&identity);
-        if let Ok(connecting) = self.endpoint.connect(&addr, &hostname) {
+        if let Ok(connecting) = self.endpoint.connect(addr, &hostname) {
             let (peer_id, stream) = Peer::start(
                 connecting,
                 self.instance_id,
@@ -607,42 +604,49 @@ fn configure_client(
     cert: &SocketCertificate,
 ) -> Result<ClientConfig, Box<dyn Error>> {
     let priv_key = rustls::PrivateKey(cert.priv_key_der.clone());
-    let chain = CertificateChain::from_pem(cert.chain_pem.as_ref())?;
-    let ca_cert = Certificate::from_pem(cert.authority_pem.as_bytes())?;
-    let mut cfg = ClientConfigBuilder::default().build();
-    let crypto_cfg =
-        Arc::get_mut(&mut cfg.crypto).expect("Arc::get_mut failed");
-    crypto_cfg.root_store.roots.clear();
-    crypto_cfg
-        .set_single_client_cert(chain.iter().cloned().collect(), priv_key)?;
-    cfg.add_certificate_authority(ca_cert)?;
-    let trans_cfg =
-        Arc::get_mut(&mut cfg.transport).expect("Arc::get_mut failed");
-    trans_cfg.keep_alive_interval(Some(Duration::from_secs(1)));
-    Ok(cfg)
+    let chain = rustls_pemfile::certs(&mut cert.chain_pem.as_bytes())?
+        .into_iter()
+        .map(rustls::Certificate)
+        .collect();
+    let mut allowed_peer_signers = rustls::RootCertStore::empty();
+    for cert in rustls_pemfile::certs(&mut cert.authority_pem.as_bytes())? {
+        let _ = allowed_peer_signers.add(&rustls::Certificate(cert));
+    }
+    let crypto = rustls::ClientConfig::builder()
+        .with_safe_defaults()
+        .with_root_certificates(allowed_peer_signers)
+        .with_single_cert(chain, priv_key)?;
+
+    let mut transport = TransportConfig::default();
+    transport.keep_alive_interval(Some(Duration::from_secs(1)));
+
+    Ok(ClientConfig {
+        transport: Arc::new(transport),
+        crypto: Arc::new(crypto),
+    })
 }
 
 fn configure_server(
     cert: &SocketCertificate,
 ) -> Result<ServerConfig, Box<dyn Error>> {
-    let priv_key = PrivateKey::from_der(&cert.priv_key_der)?;
-    let chain = CertificateChain::from_pem(cert.chain_pem.as_ref())?;
-    let mut server_config = ServerConfig::default();
-    let mut allowed_client_signers = rustls::RootCertStore::empty();
-    allowed_client_signers
-        .add_pem_file(&mut cert.authority_pem.as_ref())
-        .map_err(|()| {
-            "Failed to add certificate authority as an allowed client signer"
-        })?;
-    let crypto =
-        Arc::get_mut(&mut server_config.crypto).expect("Arc::get_mut failed");
-    crypto.set_client_certificate_verifier(
-        rustls::AllowAnyAuthenticatedClient::new(allowed_client_signers),
-    );
-    let mut cfg_builder = ServerConfigBuilder::new(server_config);
-    cfg_builder.certificate(chain, priv_key)?;
-
-    Ok(cfg_builder.build())
+    let priv_key = rustls::PrivateKey(cert.priv_key_der.clone());
+    let chain = rustls_pemfile::certs(&mut cert.chain_pem.as_bytes())?
+        .into_iter()
+        .map(rustls::Certificate)
+        .collect();
+    let mut allowed_peer_signers = rustls::RootCertStore::empty();
+    for cert in rustls_pemfile::certs(&mut cert.authority_pem.as_bytes())? {
+        let _ = allowed_peer_signers.add(&rustls::Certificate(cert));
+    }
+    let server_crypto = rustls::ServerConfig::builder()
+        .with_safe_defaults()
+        .with_client_cert_verifier(
+            rustls::server::AllowAnyAuthenticatedClient::new(
+                allowed_peer_signers,
+            ),
+        )
+        .with_single_cert(chain, priv_key)?;
+    Ok(ServerConfig::with_crypto(Arc::new(server_crypto)))
 }
 
 pub fn socket_certificate<App: Application>(app: &App) -> rcgen::Certificate {
@@ -664,11 +668,14 @@ fn verify_peer<App: Application>(
     app: &App,
     identity: &App::Identity,
 ) -> Option<PeerVerified> {
-    let chain = connection.peer_identity()?;
+    let chain = connection
+        .peer_identity()?
+        .downcast::<Vec<rustls::Certificate>>()
+        .ok()?;
     let cert = chain.iter().next()?;
-    let pki_cert = webpki::EndEntityCert::from(cert.as_ref()).ok()?;
+    let pki_cert = webpki::EndEntityCert::try_from(cert.0.as_ref()).ok()?;
     let hostname = app.identity_to_dns(identity);
-    let pki_name = webpki::DNSNameRef::try_from_ascii_str(&hostname)
+    let pki_name = webpki::DnsNameRef::try_from_ascii_str(&hostname)
         .expect("Application::identity_to_dns returned invalid DNS name");
     pki_cert.verify_is_valid_for_dns_name(pki_name).ok()?;
     Some(PeerVerified)

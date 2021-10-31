@@ -129,10 +129,7 @@ impl<K: Ord> Ord for ConnectionEntry<K> {
     }
 }
 
-pub async fn send_buf<'a, S: 'a + quinn::crypto::Session>(
-    conn: quinn::generic::Connection<S>,
-    buf: &'a [u8],
-) {
+pub async fn send_buf(conn: quinn::Connection, buf: &[u8]) {
     if let Ok(mut stream) = conn.open_uni().await {
         let _ = stream.write_all(buf).await;
     } else {

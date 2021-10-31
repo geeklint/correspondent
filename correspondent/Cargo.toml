@@ -13,13 +13,14 @@ license = "Apache-2.0 OR MIT OR Zlib"
 
 [dependencies]
 chrono = "0.4"
-futures-util = "0.3"
-quinn = "0.7"
+futures-util = { version = "0.3", features = ["channel"] }
+quinn = { git = "https://github.com/quinn-rs/quinn", branch = "main" }
 rand = "0.8"
 rcgen = { version = "0.8.6", features = ["pem", "x509-parser"] }
-rustls = "0.19"
+rustls = "0.20"
+rustls-pemfile = "0.2.1"
 tokio = { version = "1.0", features = ["full"] }
-webpki = "0.21"
+webpki = "0.22"
 x509-parser = "0.9"
 
 [target.'cfg(target_os = "linux")'.dependencies]

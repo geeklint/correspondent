@@ -32,7 +32,7 @@ jobs:
     - name: Run tests
       run: cargo test --verbose --all-features
     - name: Validate documentation
-      run: cargo doc --no-deps
+      run: cargo doc -p correspondent --no-deps
       env:
         RUSTDOCFLAGS: -Dwarnings
     - name: Check formatting

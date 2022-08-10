@@ -247,7 +247,7 @@ pub unsafe extern "C" fn sign_certificate(
 #[export_name = "correspondent_free_string"]
 pub unsafe extern "C" fn free_string(s: *mut c_char) {
     if !s.is_null() {
-        CString::from_raw(s);
+        std::mem::drop(CString::from_raw(s));
     }
 }
 

@@ -83,7 +83,7 @@ pub unsafe fn free_ca_cert(cert: *mut AuthorityCertificate) {
     if !cert.is_null() {
         let cert = Box::from_raw(cert);
         if !cert.authority_pem.is_null() {
-            CString::from_raw(cert.authority_pem);
+            std::mem::drop(CString::from_raw(cert.authority_pem));
         }
         if !cert.authority_key_pk8.is_null() {
             let slice = std::slice::from_raw_parts_mut(

@@ -124,9 +124,9 @@ pub struct ApplicationVTable {
     /// This function must tolerate being called simultaneously from
     /// arbitrary threads.
     ///
-    /// The `sender`, `msg`, and `msg_len` pointers are valid only for the
-    /// duration of this function.  Implementers should make a copy of the
-    /// pointed-to data if they need access after the function has returned.
+    /// The `sender`, pointers are valid only for the duration of this function.
+    /// Implementers should make a copy of the pointed-to data if they need
+    /// access after the function has returned.
     pub handle_stream: extern "C" fn(
         obj: *mut c_void,
         sender: *const PeerId,

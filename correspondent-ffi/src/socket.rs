@@ -150,7 +150,7 @@ pub unsafe fn start(app: *const ApplicationVTable) -> *mut Socket {
         .unwrap_or(std::ptr::null_mut())
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn network_thread(
     app: Application,
     sender: Sender<correspondent::Socket<Application>>,
@@ -172,37 +172,57 @@ async fn network_thread(
             Event::PeerGone(peer_id) => {
                 app.handle_peer_gone(&peer_id);
             }
-            Event::UniStream(peer_id, mut stream) => {
+            Event::UniStream(peer_id, stream) => {
                 let stream_handler = app.handle_stream(&peer_id);
-                tokio::spawn(async move {
-                    let mut ordered = stream_handler.ordered_initial();
-                    let chunk_size = stream_handler.max_chunk_size();
-                    loop {
-                        match stream.read_chunk(chunk_size, ordered).await {
-                            Ok(None) => break,
-                            Ok(Some(chunk)) => {
-                                use crate::stream::HandleChunkResult::*;
-                                match stream_handler
-                                    .handle_chunk(chunk.offset, &chunk.bytes)
-                                {
-                                    CleanupNow => break,
-                                    ContinueOrdered => continue,
-                                    ContinueUnordered => ordered = false,
-                                }
-                            }
-                            Err(_err) => {
-                                stream_handler.finish(Some(
-                                    &crate::StreamReadError { _inner: () },
-                                ));
-                                break;
-                            }
-                        }
-                    }
-                });
+                tokio::spawn(handle_stream(stream_handler, stream));
             }
             Event::BiStream(..) => {
                 // TODO: support bi streams in ffi?
             }
         }
     }
+}
+
+async fn handle_stream(
+    mut stream_handler: crate::stream::StreamHandler,
+    mut stream: quinn::RecvStream,
+) {
+    let mut ordered = stream_handler.ordered_initial();
+    let chunk_size = stream_handler.max_chunk_size();
+    let mut next_chunk = stream.read_chunk(chunk_size, ordered).await;
+    loop {
+        use crate::stream::HandleChunkResult::*;
+        let current_chunk = next_chunk;
+        let result;
+        let current_chunk = match current_chunk {
+            Ok(None) => break,
+            Ok(Some(chunk)) => chunk,
+            Err(_) => {
+                tokio::task::spawn_blocking(move || {
+                    stream_handler
+                        .finish(Some(&crate::StreamReadError { _inner: () }));
+                });
+                return;
+            }
+        };
+        (next_chunk, (stream_handler, result)) =
+            tokio::join!(stream.read_chunk(chunk_size, ordered), async {
+                let bg = tokio::task::spawn_blocking(move || {
+                    let res = stream_handler.handle_chunk(
+                        current_chunk.offset,
+                        &current_chunk.bytes,
+                    );
+                    (stream_handler, res)
+                });
+                bg.await.expect(
+                    "panic while running handle_chunk on blocking thread",
+                )
+            });
+        match result {
+            CleanupNow => break,
+            ContinueOrdered => continue,
+            ContinueUnordered => ordered = true,
+        }
+    }
+    tokio::task::spawn_blocking(move || stream_handler.finish(None));
 }

@@ -12,5 +12,6 @@ crate-type = ["cdylib"]
 [dependencies]
 correspondent = { path = "../correspondent" }
 futures-util = "0.3"
+quinn = { git = "https://github.com/quinn-rs/quinn", branch = "main" }
 rcgen = { version = "0.8.6", features = ["pem", "x509-parser"] }
 tokio = { version = "1.0", features = ["full"] }

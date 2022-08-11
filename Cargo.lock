@@ -129,6 +129,7 @@ version = "0.3.0-dev0"
 dependencies = [
  "correspondent",
  "futures-util",
+ "quinn",
  "rcgen",
  "tokio",
 ]

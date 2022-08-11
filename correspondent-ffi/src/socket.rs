@@ -6,7 +6,10 @@ use std::sync::{
     Arc,
 };
 
-use crate::application::{Application, ApplicationVTable};
+use crate::{
+    application::{Application, ApplicationVTable},
+    StreamWriterVTable,
+};
 
 /// Representation of a correspondent socket.
 pub struct Socket {
@@ -61,6 +64,55 @@ impl Socket {
         }
         let msg_bytes = std::slice::from_raw_parts(msg, msg_len);
         self.inner.send_to_all(msg_bytes.to_vec());
+    }
+
+    pub(crate) unsafe fn start_stream_to_id(
+        &self,
+        id: *const u8,
+        id_len: usize,
+        unique: usize,
+        writer: *mut StreamWriterVTable,
+    ) {
+        if id.is_null() || writer.is_null() {
+            return;
+        }
+        let writer = crate::stream::StreamWriter::new(writer);
+        let id_bytes = std::slice::from_raw_parts(id, id_len);
+        let peer_id = if let Ok(id_str) = std::str::from_utf8(id_bytes) {
+            correspondent::PeerId {
+                identity: id_str.to_string(),
+                unique,
+            }
+        } else {
+            return;
+        };
+        let socket = self.inner.clone();
+        self.inner.runtime().spawn(async move {
+            use futures_util::TryFutureExt;
+            let mut writer = writer;
+            let mut stream = socket.open_uni(peer_id).await.ok()?;
+            let mut left = vec![0; writer.chunk_size()];
+            let mut right = vec![0; writer.chunk_size()];
+            let mut left_len = 0;
+            loop {
+                let sending =
+                    stream.write_all(&left[..left_len]).map_err(|_| ());
+                let recving = tokio::task::spawn_blocking(move || {
+                    let right_len = writer.get_data_to_write(&mut right);
+                    (writer, right, right_len)
+                })
+                .map_err(|_| ());
+                let right_len;
+                ((), (writer, right, right_len)) =
+                    tokio::try_join!(sending, recving).ok()?;
+                if right_len == 0 {
+                    break;
+                }
+                std::mem::swap(&mut left, &mut right);
+                left_len = right_len;
+            }
+            Some(())
+        });
     }
 
     pub(crate) unsafe fn close(
@@ -120,13 +172,31 @@ async fn network_thread(
             Event::PeerGone(peer_id) => {
                 app.handle_peer_gone(&peer_id);
             }
-            Event::UniStream(peer_id, stream) => {
-                let app = Arc::clone(&app);
+            Event::UniStream(peer_id, mut stream) => {
+                let stream_handler = app.handle_stream(&peer_id);
                 tokio::spawn(async move {
-                    if let Ok(message) =
-                        stream.read_to_end(app.max_message_size()).await
-                    {
-                        app.handle_message(&peer_id, message);
+                    let mut ordered = stream_handler.ordered_initial();
+                    let chunk_size = stream_handler.max_chunk_size();
+                    loop {
+                        match stream.read_chunk(chunk_size, ordered).await {
+                            Ok(None) => break,
+                            Ok(Some(chunk)) => {
+                                use crate::stream::HandleChunkResult::*;
+                                match stream_handler
+                                    .handle_chunk(chunk.offset, &chunk.bytes)
+                                {
+                                    CleanupNow => break,
+                                    ContinueOrdered => continue,
+                                    ContinueUnordered => ordered = false,
+                                }
+                            }
+                            Err(_err) => {
+                                stream_handler.finish(Some(
+                                    &crate::StreamReadError { _inner: () },
+                                ));
+                                break;
+                            }
+                        }
                     }
                 });
             }

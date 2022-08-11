@@ -29,15 +29,6 @@ pub struct ApplicationVTable {
     /// This function pointer must be safe to send to arbitrary threads.
     pub obj: *mut c_void,
 
-    /// The maximum message size to accept from a peer.
-    ///
-    /// This is an approximate upper bound on the memory usage when receiving a
-    /// message.  This is important to avoid a situation where a malicious peer
-    /// might cause a denial of service by sending an incredibly large message.
-    /// This does not effect the amount of memory allocated for small messages;
-    /// it only imposes a maximum.
-    pub max_message_size: usize,
-
     /// Provide a location for correspondent to store some information, notably
     /// offline copies of signed certificates.
     ///
@@ -136,12 +127,10 @@ pub struct ApplicationVTable {
     /// The `sender`, `msg`, and `msg_len` pointers are valid only for the
     /// duration of this function.  Implementers should make a copy of the
     /// pointed-to data if they need access after the function has returned.
-    pub handle_message: extern "C" fn(
+    pub handle_stream: extern "C" fn(
         obj: *mut c_void,
         sender: *const PeerId,
-        msg: *const u8,
-        msg_len: usize,
-    ),
+    ) -> *mut crate::StreamHandlerVTable,
 
     /// This function is called by the library when a peer first connects.
     ///
@@ -250,27 +239,18 @@ pub struct Application {
 }
 
 impl Application {
-    pub(crate) fn max_message_size(&self) -> usize {
-        self.vtable.max_message_size
-    }
-
-    pub(crate) fn handle_message(
+    pub(crate) fn handle_stream(
         &self,
         sender: &PeerIdInternal,
-        msg: Vec<u8>,
-    ) {
+    ) -> crate::stream::StreamHandler {
         let identity: &[u8] = sender.identity.as_bytes();
         let peer_id = PeerId {
             identity: identity.as_ptr(),
             identity_len: identity.len(),
             unique: sender.unique,
         };
-        (self.vtable.handle_message)(
-            self.vtable.obj,
-            &peer_id,
-            msg.as_ptr(),
-            msg.len(),
-        );
+        let vtable = (self.vtable.handle_stream)(self.vtable.obj, &peer_id);
+        crate::stream::StreamHandler::new(vtable)
     }
 
     pub(crate) fn handle_new_peer(&self, id: &PeerIdInternal) {

@@ -161,6 +161,11 @@ impl<App: Application> Socket<App> {
         &self.app
     }
 
+    /// Get a reference to the tokio runtime stored in this socket
+    pub fn runtime(&self) -> &tokio::runtime::Handle {
+        &self.runtime
+    }
+
     pub(crate) fn instance_id(&self) -> u64 {
         self.instance_id
     }

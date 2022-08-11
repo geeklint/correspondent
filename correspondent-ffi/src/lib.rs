@@ -18,7 +18,6 @@
 #![warn(clippy::let_unit_value)]
 #![warn(clippy::manual_ok_or)]
 #![warn(clippy::match_bool)]
-#![deny(clippy::mem_forget)]
 #![warn(clippy::mut_mut)]
 #![warn(clippy::mutex_integer)]
 #![warn(clippy::needless_borrow)]
@@ -42,15 +41,19 @@ use std::{ffi::CString, os::raw::c_char};
 mod application;
 mod certificate;
 mod socket;
+mod stream;
 
 thread_local! {
     static VERSION: CString = CString::new(env!("CARGO_PKG_VERSION"))
         .expect("CARGO_PKG_VERSION should not contain a null byte");
 }
 
-pub use application::{ApplicationVTable, PeerId, SigningContext};
-pub use certificate::AuthorityCertificate;
-pub use socket::Socket;
+pub use {
+    application::{ApplicationVTable, PeerId, SigningContext},
+    certificate::AuthorityCertificate,
+    socket::Socket,
+    stream::{StreamHandlerVTable, StreamReadError, StreamWriterVTable},
+};
 
 /// Get the version number of this library as a UTF-8 encoded null-terminated
 /// string.
@@ -144,6 +147,29 @@ pub unsafe extern "C" fn socket_send_to_all(
     }
 }
 
+/// Send a message to a specific peer with the given unique id
+///
+/// # Safety
+///
+/// `socket` must point to a valid socket previously returned from a call to
+/// [`start`].  `id` must point to a valid allocation of at least
+/// `id_len` bytes.  `writer` must pointer to a valid, initialized,
+/// StreamWriterVTable.  `id` is not used after this function returns;
+/// the caller must clean them up.  `writer` will be cleaned up when its
+/// member `cleanup` is called.
+#[export_name = "correspondent_socket_start_stream_to_id"]
+pub unsafe extern "C" fn socket_start_stream_to_id(
+    socket: *const Socket,
+    id: *const u8,
+    id_len: usize,
+    unique: usize,
+    writer: *mut StreamWriterVTable,
+) {
+    if !socket.is_null() {
+        (&*socket).start_stream_to_id(id, id_len, unique, writer);
+    }
+}
+
 /// Close a socket, informing all peers that we are gone.
 ///
 /// # Safety
@@ -156,6 +182,7 @@ pub unsafe extern "C" fn socket_send_to_all(
 /// This function does not cleanup the socket resources, it only closes the
 /// active network connections. To avoid a memory leak you must still call
 /// [`socket_free`] after this function.
+#[export_name = "correspondent_socket_close"]
 pub unsafe extern "C" fn socket_close(
     socket: *mut Socket,
     code: u32,

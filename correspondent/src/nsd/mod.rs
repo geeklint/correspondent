@@ -50,20 +50,15 @@ impl<Plat> NsdManagerGeneric<Plat> {
         }
     }
 
-    pub fn new<App>(socket: crate::socket::Socket<App>) -> Self
+    pub fn new<T>(
+        socket: crate::socket::Socket<T>,
+        service_name: String,
+    ) -> Self
     where
-        App: crate::application::Application,
-        Plat: Interface<App>,
+        T: crate::application::IdentityCanonicalizer,
+        Plat: Interface<T>,
     {
         let (_handle, mut alive) = oneshot::channel();
-        let port = if let Some(port) = socket.port() {
-            port
-        } else {
-            return Self {
-                _plat: None,
-                _handle,
-            };
-        };
         let new_peers = Arc::new(NewPeers::default());
         let proxy_peer_found = {
             let new_peers = Arc::clone(&new_peers);
@@ -76,8 +71,7 @@ impl<Plat> NsdManagerGeneric<Plat> {
                 }
             }
         };
-        let instance_id = socket.instance_id();
-        let app = Arc::clone(socket.app());
+        let socket2 = socket.clone();
         let sleep_time = Duration::from_millis(100);
         let main = async move {
             loop {
@@ -89,7 +83,7 @@ impl<Plat> NsdManagerGeneric<Plat> {
                 for (found_peer, mut addresses) in
                     new_peers.found.lock().await.drain()
                 {
-                    let socket = socket.clone();
+                    let socket = socket2.clone();
                     addresses.sort_unstable_by(|a, b| b.cmp(a));
                     tokio::spawn(async move {
                         let _ = socket
@@ -105,25 +99,18 @@ impl<Plat> NsdManagerGeneric<Plat> {
             }
         };
         Self {
-            _plat: Plat::start(
-                instance_id,
-                app,
-                None, // TODO: handle non-wildcard?
-                port,
-                proxy_peer_found,
-                main,
-            ),
+            _plat: Plat::start(socket, service_name, proxy_peer_found, main),
             _handle,
         }
     }
 }
 
-pub trait Interface<App: crate::application::Application>: Sized {
+pub trait Interface<T: crate::application::IdentityCanonicalizer>:
+    Sized
+{
     fn start<Found, FoundFut, Main>(
-        instance_id: u64,
-        app: Arc<App>,
-        bind_addr: Option<IpAddr>,
-        port: u16,
+        socket: crate::Socket<T>,
+        service_name: String,
         peer_found: Found,
         main: Main,
     ) -> Option<Self>
@@ -131,7 +118,7 @@ pub trait Interface<App: crate::application::Application>: Sized {
         Found: 'static
             + Send
             + Sync
-            + Fn(FoundPeer<App::Identity>, IpAddr) -> FoundFut,
+            + Fn(FoundPeer<T::Identity>, IpAddr) -> FoundFut,
         FoundFut: Send + Sync + Future<Output = ()>,
         Main: 'static + Send + Sync + Future<Output = ()>;
 }

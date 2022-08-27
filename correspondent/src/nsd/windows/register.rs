@@ -13,23 +13,20 @@ use super::bindings::Windows::Win32::{
     NetworkManagement::Dns,
 };
 
-pub(super) fn create_service<App: crate::application::Application>(
+pub(super) fn create_service(
+    service_name: &str,
     instance_id: u64,
-    app: &App,
+    identity_txt: &[u8],
     port: u16,
     _bind_addr: Option<IpAddr>,
 ) -> Option<RegisterRequest> {
-    let service_name = format!(
-        "{}.{}.local",
-        app.service_name(),
-        super::super::SERVICE_TYPE
-    );
+    let service_name =
+        format!("{}.{}.local", service_name, super::super::SERVICE_TYPE);
     let mut hostname =
         gethostname::gethostname().to_string_lossy().into_owned();
     hostname.push_str(".local");
 
-    let id_value = app.identity_to_txt(app.identity());
-    let id_value = std::str::from_utf8(&id_value).ok()?;
+    let id_value = std::str::from_utf8(identity_txt).ok()?;
     let ins_value = format!("{:x}", instance_id);
     let txt_pairs = [("id", id_value), ("ins", &ins_value)];
     let service_instance =

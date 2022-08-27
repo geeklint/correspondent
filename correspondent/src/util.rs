@@ -1,8 +1,6 @@
 /* SPDX-License-Identifier: (Apache-2.0 OR MIT OR Zlib) */
 /* Copyright © 2021 Violet Leonard */
 
-use std::path::Path;
-
 #[derive(Clone, Debug)]
 pub struct ConnectionSet<K> {
     inner: std::collections::BTreeSet<ConnectionEntry<K>>,
@@ -135,19 +133,6 @@ pub async fn send_buf(conn: quinn::Connection, buf: &[u8]) {
     } else {
         //println!("failed to open stream!");
     }
-}
-
-pub async fn write(path: &Path, data: &[u8]) -> std::io::Result<()> {
-    let mut new_save = path.to_path_buf();
-    let mut name = path
-        .file_name()
-        .expect("Tried to save a file without a filename")
-        .to_os_string();
-    name.push("~");
-    new_save.set_file_name(name);
-    tokio::fs::write(&new_save, data).await?;
-    tokio::fs::rename(new_save, path).await?;
-    Ok(())
 }
 
 pub mod insert {

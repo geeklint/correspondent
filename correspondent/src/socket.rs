@@ -2,22 +2,26 @@
 /* Copyright © 2021 Violet Leonard */
 
 use std::{
-    collections::HashMap, convert::TryFrom, error::Error, future::Future,
-    net::SocketAddr, path::Path, sync::Arc, time::Duration,
+    collections::HashMap,
+    convert::TryFrom,
+    error::Error,
+    future::Future,
+    io,
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+    time::Duration,
 };
 
 use {
     futures_util::{Stream, StreamExt},
-    quinn::{
-        ClientConfig, Connecting, Connection, Endpoint, NewConnection,
-        ServerConfig, TransportConfig,
-    },
+    quinn::{Connecting, Connection, Endpoint, NewConnection},
     tokio::{sync::Mutex, time::timeout},
 };
 
 use crate::{
-    application::{Application, CertificateResponse},
+    application::{Application, CertificateResponse, IdentityCanonicalizer},
     nsd::NsdManager,
+    socket_builder::SocketBuilderComplete,
     util::{send_buf, ConnectionSet},
 };
 
@@ -34,24 +38,31 @@ pub struct PeerId<T> {
 type PeerList<T> = Arc<Mutex<ConnectionSet<T>>>;
 type ActiveConnections<T> = Arc<Mutex<HashMap<(T, u64), Connection>>>;
 
+pub struct Identity<T: IdentityCanonicalizer> {
+    pub(crate) identity: T::Identity,
+    pub(crate) identity_txt: Vec<u8>,
+    pub(crate) canonicalizer: T,
+}
+
 /// A socket handles connections and messages.
-pub struct Socket<App: Application> {
-    instance_id: u64,
-    app: Arc<App>,
+pub struct Socket<T: IdentityCanonicalizer> {
+    pub(crate) instance_id: u64,
+    pub(crate) identity: Arc<Identity<T>>,
+    pub(crate) discovery_addr: Option<IpAddr>,
     endpoint: Endpoint,
-    peers: PeerList<App::Identity>,
-    active_connections: ActiveConnections<App::Identity>,
+    peers: PeerList<T::Identity>,
+    active_connections: ActiveConnections<T::Identity>,
     runtime: tokio::runtime::Handle,
-    post_event:
-        tokio::sync::mpsc::UnboundedSender<InternalEvent<App::Identity>>,
+    post_event: tokio::sync::mpsc::UnboundedSender<InternalEvent<T::Identity>>,
     nsd_manager: Arc<NsdManager>,
 }
 
-impl<App: Application> Clone for Socket<App> {
+impl<T: IdentityCanonicalizer> Clone for Socket<T> {
     fn clone(&self) -> Self {
         Self {
             instance_id: self.instance_id,
-            app: Arc::clone(&self.app),
+            identity: Arc::clone(&self.identity),
+            discovery_addr: self.discovery_addr,
             endpoint: self.endpoint.clone(),
             peers: Arc::clone(&self.peers),
             active_connections: Arc::clone(&self.active_connections),
@@ -73,30 +84,27 @@ macro_rules! send_to_many {
     }};
 }
 
-impl<App: Application> Socket<App> {
+impl<T: IdentityCanonicalizer> Socket<T> {
     /// Start running the socket, listening for incoming connections.
-    pub async fn start(
-        app: Arc<App>,
-    ) -> Result<(Self, Events<App::Identity>), Box<dyn Error>> {
+    pub(crate) fn start(
+        builder: SocketBuilderComplete<T>,
+    ) -> io::Result<(Self, Events<T::Identity>)> {
         let instance_id = rand::Rng::gen(&mut rand::thread_rng());
-        let certificate = SocketCertificate::get(&*app).await?;
-        let client_cfg = configure_client(&certificate)?;
-        let server_cfg = configure_server(&certificate)?;
-        let bind_addr_str = if cfg!(windows) { "0.0.0.0:0" } else { "[::]:0" };
-        let bind_addr = bind_addr_str
-            .parse()
-            .expect("Failed to parse known valid SockAddr");
-        let (mut endpoint, incoming) =
-            Endpoint::server(server_cfg, bind_addr)?;
-        endpoint.set_default_client_config(client_cfg);
-        let app2 = Arc::clone(&app);
+        let (mut endpoint, incoming) = Endpoint::new(
+            builder.endpoint_cfg,
+            Some(builder.server_cfg),
+            builder.socket,
+        )?;
+        endpoint.set_default_client_config(builder.client_cfg);
+        let identity = Arc::new(builder.identity);
+        let identity2 = Arc::clone(&identity);
         let peers = PeerList::default();
         let peers2 = Arc::clone(&peers);
         let active_connections = ActiveConnections::default();
         let active_connections2 = Arc::clone(&active_connections);
         let (post_event, mut recv_event) =
             tokio::sync::mpsc::unbounded_channel();
-        let mut events = Events::<App::Identity> {
+        let mut events = Events::<T::Identity> {
             streams: futures_util::stream::SelectAll::new(),
         };
         events.streams.push(Box::pin(futures_util::stream::poll_fn(
@@ -105,14 +113,14 @@ impl<App: Application> Socket<App> {
         events.streams.push(
             incoming
                 .filter_map(move |connecting| {
-                    let app2 = Arc::clone(&app2);
+                    let identity2 = Arc::clone(&identity2);
                     let peers2 = Arc::clone(&peers2);
                     let active_connections2 = Arc::clone(&active_connections2);
                     async move {
                         Peer::start(
+                            identity2,
                             connecting,
                             instance_id,
-                            app2,
                             peers2,
                             active_connections2,
                         )
@@ -125,7 +133,8 @@ impl<App: Application> Socket<App> {
         );
         let temp = Self {
             instance_id,
-            app,
+            identity,
+            discovery_addr: builder.discovery_addr,
             endpoint,
             peers,
             active_connections,
@@ -135,7 +144,8 @@ impl<App: Application> Socket<App> {
             // so as to avoid circular references
             nsd_manager: Arc::new(NsdManager::empty()),
         };
-        let nsd_manager = Arc::new(NsdManager::new(temp.clone()));
+        let nsd_manager =
+            Arc::new(NsdManager::new(temp.clone(), builder.service_name.0));
         // return a version with a real NsdManager
         Ok((
             Self {
@@ -156,35 +166,18 @@ impl<App: Application> Socket<App> {
         self.endpoint.local_addr().ok().map(|addr| addr.port())
     }
 
-    /// Get a reference to the application stored in this socket
-    pub fn app(&self) -> &Arc<App> {
-        &self.app
-    }
-
     /// Get a reference to the tokio runtime stored in this socket
     pub fn runtime(&self) -> &tokio::runtime::Handle {
         &self.runtime
     }
 
-    pub(crate) fn instance_id(&self) -> u64 {
-        self.instance_id
-    }
-
     /// Manually connect to a specific peer
-    pub async fn connect(
+    async fn connect(
         &self,
         addr: SocketAddr,
-        identity: App::Identity,
-    ) -> Result<PeerId<App::Identity>, PeerNotConnected> {
-        self.connect2(addr, identity, None).await
-    }
-
-    async fn connect2(
-        &self,
-        addr: SocketAddr,
-        mut identity: App::Identity,
+        mut identity: T::Identity,
         instance_id: Option<u64>,
-    ) -> Result<PeerId<App::Identity>, PeerNotConnected> {
+    ) -> Result<PeerId<T::Identity>, PeerNotConnected> {
         if let Some(ins_id) = instance_id {
             let guard = self.active_connections.lock().await;
             let key = (identity, ins_id);
@@ -196,12 +189,12 @@ impl<App: Application> Socket<App> {
             }
             identity = key.0;
         }
-        let hostname = self.app.identity_to_dns(&identity);
+        let hostname = self.identity.canonicalizer.to_dns(&identity);
         if let Ok(connecting) = self.endpoint.connect(addr, &hostname) {
             let (peer_id, stream) = Peer::start(
+                Arc::clone(&self.identity),
                 connecting,
                 self.instance_id,
-                Arc::clone(&self.app),
                 Arc::clone(&self.peers),
                 Arc::clone(&self.active_connections),
             )
@@ -215,9 +208,10 @@ impl<App: Application> Socket<App> {
 
     pub(crate) async fn connect_local(
         &self,
-        peer: crate::nsd::PeerEntry<App::Identity>,
+        peer: crate::nsd::PeerEntry<T::Identity>,
     ) -> Result<(), PeerNotConnected> {
-        let maybe_self = self.port() == Some(peer.port);
+        let maybe_self = self.port() == Some(peer.port)
+            && self.instance_id == peer.instance_id;
         for ip in peer.addresses {
             let addr = (ip, peer.port).into();
             if maybe_self && tokio::net::UdpSocket::bind((ip, 0)).await.is_ok()
@@ -227,7 +221,7 @@ impl<App: Application> Socket<App> {
                 return Ok(());
             }
             if self
-                .connect2(addr, peer.identity.clone(), Some(peer.instance_id))
+                .connect(addr, peer.identity.clone(), Some(peer.instance_id))
                 .await
                 .is_ok()
             {
@@ -240,7 +234,7 @@ impl<App: Application> Socket<App> {
     /// Open a unidirectional stream to a specific peer
     pub async fn open_uni(
         &self,
-        target: PeerId<App::Identity>,
+        target: PeerId<T::Identity>,
     ) -> Result<quinn::SendStream, PeerNotConnected> {
         let peers = Arc::clone(&self.peers);
         let connection = {
@@ -255,7 +249,7 @@ impl<App: Application> Socket<App> {
     /// Open a bidirectional stream to a specific peer
     pub async fn open_bi(
         &self,
-        target: PeerId<App::Identity>,
+        target: PeerId<T::Identity>,
     ) -> Result<(quinn::SendStream, quinn::RecvStream), PeerNotConnected> {
         let peers = Arc::clone(&self.peers);
         let connection = {
@@ -268,7 +262,7 @@ impl<App: Application> Socket<App> {
     }
 
     /// Send a message to all connected peers with the specified identity
-    pub fn send_to(&self, target: App::Identity, msg: Vec<u8>) {
+    pub fn send_to(&self, target: T::Identity, msg: Vec<u8>) {
         let peers = Arc::clone(&self.peers);
         self.runtime.spawn(async move {
             let sending;
@@ -281,7 +275,7 @@ impl<App: Application> Socket<App> {
     }
 
     /// Send a message to a specific peer with the given id
-    pub fn send_to_id(&self, target: PeerId<App::Identity>, msg: Vec<u8>) {
+    pub fn send_to_id(&self, target: PeerId<T::Identity>, msg: Vec<u8>) {
         let peers = Arc::clone(&self.peers);
         self.runtime.spawn(async move {
             let sending;
@@ -313,6 +307,7 @@ impl<App: Application> Socket<App> {
 }
 
 /// A network event on the correspondent Socket
+#[non_exhaustive]
 pub enum Event<Id> {
     /// Fired when a new peer has connected
     NewPeer(PeerId<Id>, quinn::Connection),
@@ -380,14 +375,14 @@ impl Peer {
         });
     }
 
-    async fn start<App: Application>(
+    async fn start<T: IdentityCanonicalizer>(
+        identity: Arc<Identity<T>>,
         connecting: Connecting,
         our_instance_id: u64,
-        app: Arc<App>,
-        peer_list: PeerList<App::Identity>,
-        active_connections: ActiveConnections<App::Identity>,
+        peer_list: PeerList<T::Identity>,
+        active_connections: ActiveConnections<T::Identity>,
     ) -> Result<
-        (PeerId<App::Identity>, InternalEventStream<App::Identity>),
+        (PeerId<T::Identity>, InternalEventStream<T::Identity>),
         PeerNotConnected,
     > {
         let NewConnection {
@@ -407,13 +402,12 @@ impl Peer {
         let sending_hello = hello_timeout(async {
             let mut first_stream =
                 connection.open_uni().await.map_err(|_| PeerNotConnected)?;
-            let buf = app.identity_to_txt(app.identity());
             first_stream
                 .write_all(&our_instance_id.to_be_bytes())
                 .await
                 .map_err(|_| PeerNotConnected)?;
             first_stream
-                .write_all(&buf)
+                .write_all(&identity.identity_txt)
                 .await
                 .map_err(|_| PeerNotConnected)?;
             Ok(())
@@ -432,12 +426,16 @@ impl Peer {
                 .read_to_end(256)
                 .await
                 .map_err(|_| PeerNotConnected)?;
-            let hello = app.identity_from_txt(&buf).ok_or(PeerNotConnected)?;
+            let hello = identity
+                .canonicalizer
+                .parse_txt(&buf)
+                .ok_or(PeerNotConnected)?;
             Ok((u64::from_be_bytes(instance_id_bytes), hello))
         });
         let ((), (peer_instance_id, hello)) =
             tokio::try_join!(sending_hello, recving_hello)?;
-        verify_peer(&connection, &*app, &hello).ok_or(PeerNotConnected)?;
+        let peer_hostname = identity.canonicalizer.to_dns(&hello);
+        verify_peer(&connection, &peer_hostname).ok_or(PeerNotConnected)?;
 
         let peer_instance_id = (hello.clone(), peer_instance_id);
 
@@ -536,17 +534,6 @@ impl SocketCertificate {
     pub async fn get<App: Application>(
         app: &App,
     ) -> Result<Self, Box<dyn Error>> {
-        let mut data_dir = app.application_data_dir();
-        std::fs::create_dir_all(&data_dir)?;
-        data_dir.push("instance-certificate");
-        if let Some(cert) = Self::load(&data_dir).await? {
-            let (_rem, pem) =
-                x509_parser::pem::parse_x509_pem(cert.chain_pem.as_bytes())?;
-            let parsed = pem.parse_x509()?;
-            if parsed.validity().is_valid() {
-                return Ok(cert);
-            }
-        }
         let new = socket_certificate::<App>(app);
         let CertificateResponse {
             client_chain_pem,
@@ -558,100 +545,8 @@ impl SocketCertificate {
             chain_pem: client_chain_pem,
             authority_pem,
         };
-        let _ = this.save(&data_dir);
         Ok(this)
     }
-
-    pub async fn load(path: &Path) -> std::io::Result<Option<Self>> {
-        use {
-            std::io::ErrorKind::NotFound,
-            tokio::fs::{read, read_to_string},
-        };
-        let mut path_key = path.to_path_buf();
-        path_key.set_extension("pk8");
-        let mut path_chain = path.to_path_buf();
-        path_chain.set_extension("pem");
-        let mut path_ca = path.to_path_buf();
-        path_ca.set_extension("ca.pem");
-        match tokio::try_join!(
-            read(&path_key),
-            read_to_string(&path_chain),
-            read_to_string(&path_ca)
-        ) {
-            Ok((priv_key_der, chain_pem, authority_pem)) => Ok(Some(Self {
-                priv_key_der,
-                chain_pem,
-                authority_pem,
-            })),
-            Err(e) if e.kind() == NotFound => Ok(None),
-            Err(e) => Err(e),
-        }
-    }
-
-    pub async fn save(&self, path: &Path) -> std::io::Result<()> {
-        use crate::util::write;
-        let mut path_key = path.to_path_buf();
-        path_key.set_extension("pk8");
-        let mut path_chain = path.to_path_buf();
-        path_chain.set_extension("pem");
-        let mut path_ca = path.to_path_buf();
-        path_ca.set_extension("ca.pem");
-        tokio::try_join!(
-            write(&path_key, &self.priv_key_der),
-            write(&path_chain, self.chain_pem.as_ref()),
-            write(&path_ca, self.authority_pem.as_ref()),
-        )
-        .map(|_| ())
-    }
-}
-
-fn configure_client(
-    cert: &SocketCertificate,
-) -> Result<ClientConfig, Box<dyn Error>> {
-    let priv_key = rustls::PrivateKey(cert.priv_key_der.clone());
-    let chain = rustls_pemfile::certs(&mut cert.chain_pem.as_bytes())?
-        .into_iter()
-        .map(rustls::Certificate)
-        .collect();
-    let mut allowed_peer_signers = rustls::RootCertStore::empty();
-    for cert in rustls_pemfile::certs(&mut cert.authority_pem.as_bytes())? {
-        let _ = allowed_peer_signers.add(&rustls::Certificate(cert));
-    }
-    let crypto = rustls::ClientConfig::builder()
-        .with_safe_defaults()
-        .with_root_certificates(allowed_peer_signers)
-        .with_single_cert(chain, priv_key)?;
-
-    let mut transport = TransportConfig::default();
-    transport.keep_alive_interval(Some(Duration::from_secs(1)));
-
-    Ok(ClientConfig {
-        transport: Arc::new(transport),
-        crypto: Arc::new(crypto),
-    })
-}
-
-fn configure_server(
-    cert: &SocketCertificate,
-) -> Result<ServerConfig, Box<dyn Error>> {
-    let priv_key = rustls::PrivateKey(cert.priv_key_der.clone());
-    let chain = rustls_pemfile::certs(&mut cert.chain_pem.as_bytes())?
-        .into_iter()
-        .map(rustls::Certificate)
-        .collect();
-    let mut allowed_peer_signers = rustls::RootCertStore::empty();
-    for cert in rustls_pemfile::certs(&mut cert.authority_pem.as_bytes())? {
-        let _ = allowed_peer_signers.add(&rustls::Certificate(cert));
-    }
-    let server_crypto = rustls::ServerConfig::builder()
-        .with_safe_defaults()
-        .with_client_cert_verifier(
-            rustls::server::AllowAnyAuthenticatedClient::new(
-                allowed_peer_signers,
-            ),
-        )
-        .with_single_cert(chain, priv_key)?;
-    Ok(ServerConfig::with_crypto(Arc::new(server_crypto)))
 }
 
 pub fn socket_certificate<App: Application>(app: &App) -> rcgen::Certificate {
@@ -668,10 +563,9 @@ pub fn socket_certificate<App: Application>(app: &App) -> rcgen::Certificate {
 struct PeerVerified;
 
 #[must_use]
-fn verify_peer<App: Application>(
+fn verify_peer(
     connection: &Connection,
-    app: &App,
-    identity: &App::Identity,
+    hostname: &str,
 ) -> Option<PeerVerified> {
     let chain = connection
         .peer_identity()?
@@ -679,8 +573,7 @@ fn verify_peer<App: Application>(
         .ok()?;
     let cert = chain.iter().next()?;
     let pki_cert = webpki::EndEntityCert::try_from(cert.0.as_ref()).ok()?;
-    let hostname = app.identity_to_dns(identity);
-    let pki_name = webpki::DnsNameRef::try_from_ascii_str(&hostname)
+    let pki_name = webpki::DnsNameRef::try_from_ascii_str(hostname)
         .expect("Application::identity_to_dns returned invalid DNS name");
     pki_cert.verify_is_valid_for_dns_name(pki_name).ok()?;
     Some(PeerVerified)

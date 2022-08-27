@@ -112,11 +112,12 @@ dependencies = [
  "dbus-tokio",
  "futures-util",
  "gethostname",
- "quinn",
+ "quinn 0.8.4",
  "rand",
  "rcgen",
  "rustls",
  "rustls-pemfile",
+ "socket2",
  "tokio",
  "webpki",
  "windows",
@@ -129,7 +130,7 @@ version = "0.3.0-dev0"
 dependencies = [
  "correspondent",
  "futures-util",
- "quinn",
+ "quinn 0.7.0",
  "rcgen",
  "tokio",
 ]
@@ -333,9 +334,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.98"
+version = "0.2.132"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "320cfe77175da3a483efed4bc0adc1968ca050b098ce4f2f1c13a56626128790"
+checksum = "8371e4e5341c3a96db127eb2465ac681ced4c433e01dd0e938adbef26ba93ba5"
 
 [[package]]
 name = "libdbus-sys"
@@ -565,8 +566,27 @@ dependencies = [
  "futures-channel",
  "futures-util",
  "fxhash",
- "quinn-proto",
- "quinn-udp",
+ "quinn-proto 0.7.0",
+ "quinn-udp 0.1.0-beta.1",
+ "rustls",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "webpki",
+]
+
+[[package]]
+name = "quinn"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21afdc492bf2a8688cb386be6605d1163b6ace89afa5e3b529037d2b4334b860"
+dependencies = [
+ "bytes",
+ "futures-channel",
+ "futures-util",
+ "fxhash",
+ "quinn-proto 0.8.4",
+ "quinn-udp 0.1.3",
  "rustls",
  "thiserror",
  "tokio",
@@ -594,6 +614,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "quinn-proto"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3fce546b9688f767a57530652488420d419a8b1f44a478b451c3d1ab6d992a55"
+dependencies = [
+ "bytes",
+ "fxhash",
+ "rand",
+ "ring",
+ "rustls",
+ "rustls-pemfile",
+ "slab",
+ "thiserror",
+ "tinyvec",
+ "tracing",
+ "webpki",
+]
+
+[[package]]
 name = "quinn-udp"
 version = "0.1.0-beta.1"
 source = "git+https://github.com/quinn-rs/quinn?branch=main#e26753dea0fb46a50ce7b434eb45a10a9b16a7b3"
@@ -601,7 +640,21 @@ dependencies = [
  "futures-util",
  "libc",
  "mio",
- "quinn-proto",
+ "quinn-proto 0.7.0",
+ "socket2",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "quinn-udp"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f832d8958db3e84d2ec93b5eb2272b45aa23cf7f8fe6e79f578896f4e6c231b"
+dependencies = [
+ "futures-util",
+ "libc",
+ "quinn-proto 0.8.4",
  "socket2",
  "tokio",
  "tracing",
@@ -725,9 +778,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.20.0"
+version = "0.20.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b5ac6078ca424dc1d3ae2328526a76787fecc7f8011f520e3276730e711fc95"
+checksum = "5aab8ee6c7097ed6057f43c187a62418d0c05a4bd5f18b3571db50ee0f9ce033"
 dependencies = [
  "log",
  "ring",
@@ -840,9 +893,9 @@ checksum = "fe0f37c9e8f3c5a4a66ad655a93c74daac4ad00c441533bf5c6e7990bb42604e"
 
 [[package]]
 name = "socket2"
-version = "0.4.2"
+version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5dc90fe6c7be1a323296982db1836d1ea9e47b6839496dde9a541bc496df3516"
+checksum = "10c98bba371b9b22a71a9414e420f92ddeb2369239af08200816169d5e2dd7aa"
 dependencies = [
  "libc",
  "winapi",

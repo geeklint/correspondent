@@ -12,22 +12,22 @@ use super::bindings::Windows::Win32::{
     Foundation::PWSTR, NetworkManagement::Dns,
 };
 
-pub(super) fn browse_services<App, Found, FoundFut>(
-    app: Arc<App>,
+pub(super) fn browse_services<T, Found, FoundFut>(
+    identity: Arc<crate::socket::Identity<T>>,
     peer_found: Found,
 ) -> Option<super::CancelToken<CancelBrowse>>
 where
-    App: crate::application::Application,
+    T: crate::IdentityCanonicalizer,
     Found: 'static
         + Send
         + Sync
-        + Fn(super::super::FoundPeer<App::Identity>, IpAddr) -> FoundFut,
+        + Fn(super::super::FoundPeer<T::Identity>, IpAddr) -> FoundFut,
     FoundFut: Send + Sync + Future<Output = ()>,
 {
     let browse_context: Box<Arc<dyn BrowsingContext>> =
         Box::new(Arc::new(BrowsingContextGeneric {
             handle: tokio::runtime::Handle::current(),
-            app,
+            identity,
             peer_found,
         }));
     let callback = unsafe {
@@ -140,9 +140,9 @@ unsafe extern "system" fn service_resolve_callback(
     }
 }
 
-struct BrowsingContextGeneric<App, Found> {
+struct BrowsingContextGeneric<T: crate::IdentityCanonicalizer, Found> {
     handle: tokio::runtime::Handle,
-    app: Arc<App>,
+    identity: Arc<crate::socket::Identity<T>>,
     peer_found: Found,
 }
 
@@ -150,14 +150,13 @@ trait BrowsingContext {
     unsafe fn do_spawn(self: Arc<Self>, instance: &Dns::DNS_SERVICE_INSTANCE);
 }
 
-impl<App, Found, FoundFut> BrowsingContext
-    for BrowsingContextGeneric<App, Found>
+impl<T, Found, FoundFut> BrowsingContext for BrowsingContextGeneric<T, Found>
 where
-    App: crate::application::Application,
+    T: crate::IdentityCanonicalizer,
     Found: 'static
         + Send
         + Sync
-        + Fn(super::super::FoundPeer<App::Identity>, IpAddr) -> FoundFut,
+        + Fn(super::super::FoundPeer<T::Identity>, IpAddr) -> FoundFut,
     FoundFut: Send + Sync + Future<Output = ()>,
 {
     unsafe fn do_spawn(self: Arc<Self>, instance: &Dns::DNS_SERVICE_INSTANCE) {
@@ -182,7 +181,8 @@ where
         for (key, value) in keys.iter().copied().zip(values.iter().copied()) {
             if super::utf16_null_equals(&id_key, key.0) {
                 let id_str = super::utf16_null_to_string(value.0);
-                identity = self.app.identity_from_txt(id_str.as_bytes());
+                identity =
+                    self.identity.canonicalizer.parse_txt(id_str.as_bytes());
             } else if super::utf16_null_equals(&ins_key, key.0) {
                 let ins_str = super::utf16_null_to_string(value.0);
                 instance = u64::from_str_radix(&ins_str, 16).ok();

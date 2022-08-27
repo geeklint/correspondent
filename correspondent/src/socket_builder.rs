@@ -1,0 +1,261 @@
+/* SPDX-License-Identifier: (Apache-2.0 OR MIT OR Zlib) */
+/* Copyright © 2021 Violet Leonard */
+
+use std::{
+    io,
+    net::{IpAddr, SocketAddr, UdpSocket},
+    sync::Arc,
+};
+
+use quinn::{ClientConfig, EndpointConfig, ServerConfig};
+
+use crate::{application::IdentityCanonicalizer, socket::Identity};
+
+pub struct SocketCertificate {
+    pub priv_key: rustls::PrivateKey,
+    pub chain: Vec<rustls::Certificate>,
+    pub authority: rustls::RootCertStore,
+}
+
+impl SocketCertificate {
+    pub fn from_data(
+        priv_key_der: Vec<u8>,
+        chain_pem: String,
+        authority_pem: String,
+    ) -> std::io::Result<Self> {
+        let priv_key = rustls::PrivateKey(priv_key_der);
+        let chain = rustls_pemfile::certs(&mut chain_pem.as_bytes())?
+            .into_iter()
+            .map(rustls::Certificate)
+            .collect();
+        let mut authority = rustls::RootCertStore::empty();
+        for cert in rustls_pemfile::certs(&mut authority_pem.as_bytes())? {
+            let _ = authority.add(&rustls::Certificate(cert));
+        }
+        Ok(Self {
+            priv_key,
+            chain,
+            authority,
+        })
+    }
+}
+
+/// Options for configuring the creation of a socket.
+///
+/// The builder exposes the ability to configure the socket's identity, the
+/// DNS-SD service, and the quic endpoint.
+pub struct SocketBuilder<
+    Id,
+    ServiceName,
+    UdpSocket,
+    EndpointConfig,
+    ClientConfig,
+    ServerConfig,
+> {
+    pub(crate) identity: Id,
+    pub(crate) service_name: ServiceName,
+    pub(crate) socket: UdpSocket,
+    pub(crate) discovery_addr: Option<IpAddr>,
+    pub(crate) endpoint_cfg: EndpointConfig,
+    pub(crate) client_cfg: ClientConfig,
+    pub(crate) server_cfg: ServerConfig,
+}
+
+pub type SocketBuilderComplete<T> = SocketBuilder<
+    Identity<T>,
+    ServiceName,
+    UdpSocket,
+    EndpointConfig,
+    ClientConfig,
+    ServerConfig,
+>;
+
+impl<T: IdentityCanonicalizer> SocketBuilderComplete<T> {
+    /// Finishs building a socket and starts both the DNS-SD service and
+    /// quic Endpoint.
+    pub fn start(
+        self,
+    ) -> io::Result<(crate::Socket<T>, crate::Events<T::Identity>)> {
+        crate::Socket::start(self)
+    }
+}
+
+impl<Id, SN, US, EC, CC, SC> SocketBuilder<Id, SN, US, EC, CC, SC> {
+    /// Creates blank SocketBuilder ready for configuration
+    ///
+    /// All options must be specified before calling [`build`].
+    pub fn new() -> SocketBuilder<
+        NoIdentity,
+        NoServiceName,
+        NoUdpSocket,
+        NoEndpointConfig,
+        NoClientConfig,
+        NoServerConfig,
+    > {
+        SocketBuilder {
+            identity: NoIdentity,
+            service_name: NoServiceName,
+            socket: NoUdpSocket,
+            discovery_addr: None,
+            endpoint_cfg: NoEndpointConfig,
+            client_cfg: NoClientConfig,
+            server_cfg: NoServerConfig,
+        }
+    }
+
+    /// Sets the identity the socket will have and the canonicalizer used
+    /// to convert identities to the network format(s).
+    pub fn with_identity<T: IdentityCanonicalizer>(
+        self,
+        identity: T::Identity,
+        canonicalizer: T,
+    ) -> SocketBuilder<Identity<T>, SN, US, EC, CC, SC> {
+        let identity_txt = canonicalizer.to_txt(&identity);
+        SocketBuilder {
+            identity: Identity {
+                identity,
+                identity_txt,
+                canonicalizer,
+            },
+            service_name: self.service_name,
+            socket: self.socket,
+            discovery_addr: self.discovery_addr,
+            endpoint_cfg: self.endpoint_cfg,
+            client_cfg: self.client_cfg,
+            server_cfg: self.server_cfg,
+        }
+    }
+
+    /// Sets the DNS-SD service name used by the socket to advertize itself
+    /// on the local network.
+    pub fn with_service_name(
+        self,
+        name: String,
+    ) -> SocketBuilder<Id, ServiceName, US, EC, CC, SC> {
+        SocketBuilder {
+            identity: self.identity,
+            service_name: ServiceName(name),
+            socket: self.socket,
+            discovery_addr: self.discovery_addr,
+            endpoint_cfg: self.endpoint_cfg,
+            client_cfg: self.client_cfg,
+            server_cfg: self.server_cfg,
+        }
+    }
+
+    /// Manually specifies a socket to use for the quic endpoint.
+    ///
+    /// This socket can be pre-configured with a crate like socket2, although
+    /// for correct async behavior it may be required to set the socket to
+    /// nonblocking mode.
+    ///
+    /// `discovery_addr` is the address advertized on the DNS-SD service, or
+    /// None to advertize all local ip addresses.
+    pub fn with_socket(
+        self,
+        socket: UdpSocket,
+        discovery_addr: Option<IpAddr>,
+    ) -> SocketBuilder<Id, SN, UdpSocket, EC, CC, SC> {
+        SocketBuilder {
+            identity: self.identity,
+            service_name: self.service_name,
+            socket,
+            discovery_addr,
+            endpoint_cfg: self.endpoint_cfg,
+            client_cfg: self.client_cfg,
+            server_cfg: self.server_cfg,
+        }
+    }
+
+    /// Sets up the socket with the recomended settings.
+    pub fn with_default_socket(
+        self,
+    ) -> io::Result<SocketBuilder<Id, SN, UdpSocket, EC, CC, SC>> {
+        use socket2::{Domain, Protocol, Socket, Type};
+        let addr: SocketAddr = "[::]:0"
+            .parse()
+            .expect("failed to parse known valid socket address");
+        let socket =
+            Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
+        socket.set_nonblocking(true)?;
+        socket.set_only_v6(false)?;
+        socket.bind(&addr.into())?;
+        Ok(SocketBuilder {
+            identity: self.identity,
+            service_name: self.service_name,
+            socket: socket.into(),
+            discovery_addr: None,
+            endpoint_cfg: self.endpoint_cfg,
+            client_cfg: self.client_cfg,
+            server_cfg: self.server_cfg,
+        })
+    }
+
+    /// Specifies the config for the quic endpoint.
+    pub fn with_endpoint_cfg(
+        self,
+        endpoint_cfg: EndpointConfig,
+    ) -> SocketBuilder<Id, SN, US, EndpointConfig, CC, SC> {
+        SocketBuilder {
+            identity: self.identity,
+            service_name: self.service_name,
+            socket: self.socket,
+            discovery_addr: self.discovery_addr,
+            endpoint_cfg,
+            client_cfg: self.client_cfg,
+            server_cfg: self.server_cfg,
+        }
+    }
+
+    /// Specifies the config for the quic endpoint with all default settings.
+    pub fn with_default_endpoint_cfg(
+        self,
+    ) -> SocketBuilder<Id, SN, US, EndpointConfig, CC, SC>
+    where
+        EndpointConfig: Default,
+    {
+        self.with_endpoint_cfg(EndpointConfig::default())
+    }
+
+    /// Specifies the socket should use the provided certificate and authority
+    /// for authenticating with peers.
+    pub fn with_certificate(
+        self,
+        cert: SocketCertificate,
+    ) -> Result<
+        SocketBuilder<Id, SN, US, EC, ClientConfig, ServerConfig>,
+        rustls::Error,
+    > {
+        let client_crypto = rustls::ClientConfig::builder()
+            .with_safe_defaults()
+            .with_root_certificates(cert.authority.clone())
+            .with_single_cert(cert.chain.clone(), cert.priv_key.clone())?;
+        let server_crypto = rustls::ServerConfig::builder()
+            .with_safe_defaults()
+            .with_client_cert_verifier(
+                rustls::server::AllowAnyAuthenticatedClient::new(
+                    cert.authority,
+                ),
+            )
+            .with_single_cert(cert.chain, cert.priv_key)?;
+        let client_cfg = ClientConfig::new(Arc::new(client_crypto));
+        let server_cfg = ServerConfig::with_crypto(Arc::new(server_crypto));
+        Ok(SocketBuilder {
+            identity: self.identity,
+            service_name: self.service_name,
+            socket: self.socket,
+            discovery_addr: self.discovery_addr,
+            endpoint_cfg: self.endpoint_cfg,
+            client_cfg,
+            server_cfg,
+        })
+    }
+}
+
+pub struct NoIdentity;
+pub struct NoServiceName;
+pub struct NoUdpSocket;
+pub struct NoEndpointConfig;
+pub struct NoClientConfig;
+pub struct NoServerConfig;
+pub struct ServiceName(pub(crate) String);

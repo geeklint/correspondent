@@ -24,15 +24,13 @@ pub struct NsdManager {
     _deregister: Option<RegisterRequest>,
 }
 
-impl<App> super::Interface<App> for NsdManager
+impl<T> super::Interface<T> for NsdManager
 where
-    App: crate::application::Application,
+    T: crate::application::IdentityCanonicalizer,
 {
     fn start<Found, FoundFut, Main>(
-        instance_id: u64,
-        app: Arc<App>,
-        bind_addr: Option<IpAddr>,
-        port: u16,
+        socket: crate::Socket<T>,
+        service_name: String,
         peer_found: Found,
         main: Main,
     ) -> Option<Self>
@@ -40,12 +38,21 @@ where
         Found: 'static
             + Send
             + Sync
-            + Fn(super::FoundPeer<App::Identity>, IpAddr) -> FoundFut,
+            + Fn(super::FoundPeer<T::Identity>, IpAddr) -> FoundFut,
         FoundFut: Send + Sync + Future<Output = ()>,
         Main: 'static + Send + Sync + Future<Output = ()>,
     {
-        let _deregister = create_service(instance_id, &*app, port, bind_addr);
-        let _cancel_browse = browse_services(app, peer_found);
+        let _deregister = socket.port().and_then(|port| {
+            create_service(
+                &service_name,
+                socket.instance_id,
+                &socket.identity.identity_txt,
+                port,
+                socket.discovery_addr,
+            )
+        });
+        let _cancel_browse =
+            browse_services(Arc::clone(&socket.identity), peer_found);
         tokio::spawn(main);
         Some(Self {
             _cancel_browse,

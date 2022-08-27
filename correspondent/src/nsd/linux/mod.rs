@@ -42,15 +42,13 @@ pub struct NsdManager {
     )>,
 }
 
-impl<App> super::Interface<App> for NsdManager
+impl<T> super::Interface<T> for NsdManager
 where
-    App: crate::application::Application,
+    T: crate::application::IdentityCanonicalizer,
 {
     fn start<Found, FoundFut, Main>(
-        instance_id: u64,
-        app: Arc<App>,
-        bind_addr: Option<IpAddr>,
-        port: u16,
+        socket: crate::Socket<T>,
+        service_name: String,
         peer_found: Found,
         main: Main,
     ) -> Option<Self>
@@ -58,7 +56,7 @@ where
         Found: 'static
             + Send
             + Sync
-            + Fn(super::FoundPeer<App::Identity>, IpAddr) -> FoundFut,
+            + Fn(super::FoundPeer<T::Identity>, IpAddr) -> FoundFut,
         FoundFut: Send + Sync + Future<Output = ()>,
         Main: 'static + Send + Sync + Future<Output = ()>,
     {
@@ -79,16 +77,8 @@ where
         );
         tokio::spawn({
             async move {
-                Self::startup(
-                    instance_id,
-                    app,
-                    proxy,
-                    port,
-                    bind_addr,
-                    peer_found,
-                    main,
-                )
-                .await;
+                Self::startup(socket, service_name, proxy, peer_found, main)
+                    .await;
             }
         });
         Some(Self {
@@ -98,20 +88,18 @@ where
 }
 
 impl NsdManager {
-    async fn startup<App, Found, FoundFut, Main>(
-        instance_id: u64,
-        app: Arc<App>,
+    async fn startup<T, Found, FoundFut, Main>(
+        socket: crate::Socket<T>,
+        service_name: String,
         proxy: Proxy<'static, Arc<SyncConnection>>,
-        port: u16,
-        bind_addr: Option<IpAddr>,
         peer_found: Found,
         main: Main,
     ) where
-        App: crate::application::Application,
+        T: crate::application::IdentityCanonicalizer,
         Found: 'static
             + Send
             + Sync
-            + Fn(super::FoundPeer<App::Identity>, IpAddr) -> FoundFut,
+            + Fn(super::FoundPeer<T::Identity>, IpAddr) -> FoundFut,
         FoundFut: Send + Sync + Future<Output = ()>,
         Main: 'static + Send + Sync + Future<Output = ()>,
     {
@@ -121,16 +109,36 @@ impl NsdManager {
                 return;
             }
         }
-        let serving =
-            create_service(instance_id, &*app, &proxy, port, bind_addr).await;
+        let serving = if let Some(port) = socket.port() {
+            Some(
+                create_service(
+                    &service_name,
+                    socket.instance_id,
+                    &socket.identity.identity_txt,
+                    &proxy,
+                    port,
+                    socket.discovery_addr,
+                )
+                .await,
+            )
+        } else {
+            None
+        };
         /*
         match &serving {
             Ok(_) => println!("registered service with avahi"),
             Err(err) => eprintln!("failed to create service: {}", err),
         }
         */
-        let browsing =
-            browse_services(app, &proxy, bind_addr, peer_found).await;
+        let identity = Arc::clone(&socket.identity);
+        let browsing = browse_services(
+            &service_name,
+            move |txt| identity.canonicalizer.parse_txt(txt),
+            &proxy,
+            socket.discovery_addr,
+            peer_found,
+        )
+        .await;
         /*
         match &browsing {
             Ok(_) => println!("started browsing for avahi services"),
@@ -142,12 +150,13 @@ impl NsdManager {
     }
 }
 
-async fn create_service<App: crate::application::Application>(
+async fn create_service(
+    mut service_name: &str,
     instance_id: u64,
-    app: &App,
+    identity_txt: &[u8],
     proxy: &Proxy<'static, Arc<SyncConnection>>,
     port: u16,
-    bind_addr: Option<IpAddr>,
+    discovery_addr: Option<IpAddr>,
 ) -> Result<MsgMatch, dbus::Error> {
     let group = Proxy {
         path: proxy.entry_group_new().await?,
@@ -159,21 +168,21 @@ async fn create_service<App: crate::application::Application>(
         true
     });
     let interface = -1; // IF_UNSPEC
-    let protocol = match bind_addr {
+    let protocol = match discovery_addr {
         None => -1, // PROTO_UNSPEC
         Some(IpAddr::V4(_)) => 0,
         Some(IpAddr::V6(_)) => 1,
     };
     let flags = 0;
-    let mut name = app.service_name();
+    let mut alt_service_name: String;
     let type_ = super::SERVICE_TYPE;
     let domain = "";
-    let host = match bind_addr {
+    let host = match discovery_addr {
         Some(ip) => Cow::Owned(ip.to_string()),
         None => Cow::Borrowed(""),
     };
     let mut id_txt_line = b"id=".to_vec();
-    id_txt_line.extend(app.identity_to_txt(app.identity()));
+    id_txt_line.extend(identity_txt);
     let mut ins_txt_line = "ins=".to_string();
     write!(&mut ins_txt_line, "{:x}", instance_id)
         .expect("formatting an integer into a string failed");
@@ -184,7 +193,7 @@ async fn create_service<App: crate::application::Application>(
                 interface,
                 protocol,
                 flags,
-                &name,
+                service_name,
                 type_,
                 domain,
                 &host,
@@ -196,7 +205,10 @@ async fn create_service<App: crate::application::Application>(
             Ok(_) => break,
             Err(err) => {
                 if err.name() == Some("org.freedesktop.Avahi.CollisionError") {
-                    name = proxy.get_alternative_service_name(&name).await?;
+                    alt_service_name = proxy
+                        .get_alternative_service_name(service_name)
+                        .await?;
+                    service_name = &alt_service_name;
                     continue;
                 } else {
                     return Err(err);
@@ -209,18 +221,18 @@ async fn create_service<App: crate::application::Application>(
     Ok(msg_match)
 }
 
-async fn browse_services<App, Found, FoundFut>(
-    app: Arc<App>,
+async fn browse_services<Id, IdFromTxt, Found, FoundFut>(
+    service_name: &str,
+    identity_from_txt: IdFromTxt,
     proxy: &Proxy<'static, Arc<SyncConnection>>,
     bind_addr: Option<IpAddr>,
     peer_found: Found,
 ) -> Result<MsgMatch, dbus::Error>
 where
-    App: crate::application::Application,
-    Found: 'static
-        + Send
-        + Sync
-        + Fn(super::FoundPeer<App::Identity>, IpAddr) -> FoundFut,
+    Id: Send + Sync,
+    IdFromTxt: 'static + Send + Sync + Clone + Fn(&[u8]) -> Option<Id>,
+    Found:
+        'static + Send + Sync + Fn(super::FoundPeer<Id>, IpAddr) -> FoundFut,
     FoundFut: Send + Sync + Future<Output = ()>,
 {
     let interface = -1; // IF_UNSPEC
@@ -243,7 +255,7 @@ where
     let peer_found = Arc::new(peer_found);
     Ok(proxy.connection.add_match(rule).await?.cb(
         move |_msg, item_new: ItemNew| {
-            let app = Arc::clone(&app);
+            let identity_from_txt = identity_from_txt.clone();
             let proxy = proxy2.clone();
             let peer_found = Arc::clone(&peer_found);
             tokio::spawn(async move {
@@ -279,7 +291,7 @@ where
                 let mut instance_id = None;
                 for txt_line in txt {
                     if let Some(id_bytes) = txt_line.strip_prefix(b"id=") {
-                        identity = app.identity_from_txt(id_bytes);
+                        identity = identity_from_txt(id_bytes);
                     } else if let Some(ins_bytes) =
                         txt_line.strip_prefix(b"ins=")
                     {

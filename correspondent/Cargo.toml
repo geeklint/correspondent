@@ -14,11 +14,12 @@ license = "Apache-2.0 OR MIT OR Zlib"
 [dependencies]
 chrono = "0.4"
 futures-util = { version = "0.3", features = ["channel"] }
-quinn = { git = "https://github.com/quinn-rs/quinn", branch = "main" }
+quinn = { version = "0.8.4", default-features = false, features = ["tls-rustls"] }
 rand = "0.8"
 rcgen = { version = "0.8.6", features = ["pem", "x509-parser"] }
-rustls = "0.20"
+rustls = "0.20.6"
 rustls-pemfile = "0.2.1"
+socket2 = "0.4.6"
 tokio = { version = "1.0", features = ["full"] }
 webpki = "0.22"
 x509-parser = "0.9"

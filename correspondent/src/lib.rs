@@ -60,7 +60,7 @@ mod socket_builder;
 mod util;
 
 pub use self::{
-    application::{Application, CertificateResponse, IdentityCanonicalizer},
+    application::{Application, IdentityCanonicalizer},
     socket::{Event, Events, Peer, PeerId, Socket},
-    socket_builder::SocketBuilder,
+    socket_builder::{CertificateResponse, SocketBuilder, SocketCertificate},
 };

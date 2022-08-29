@@ -4,7 +4,6 @@
 use std::{
     collections::HashMap,
     convert::TryFrom,
-    error::Error,
     future::Future,
     io,
     net::{IpAddr, SocketAddr},
@@ -19,7 +18,7 @@ use {
 };
 
 use crate::{
-    application::{Application, CertificateResponse, IdentityCanonicalizer},
+    application::IdentityCanonicalizer,
     nsd::NsdManager,
     socket_builder::SocketBuilderComplete,
     util::{send_buf, ConnectionSet},
@@ -524,45 +523,12 @@ impl Peer {
         ))
     }
 }
-pub struct SocketCertificate {
-    pub priv_key_der: Vec<u8>,
-    pub chain_pem: String,
-    pub authority_pem: String,
-}
-
-impl SocketCertificate {
-    pub async fn get<App: Application>(
-        app: &App,
-    ) -> Result<Self, Box<dyn Error>> {
-        let new = socket_certificate::<App>(app);
-        let CertificateResponse {
-            client_chain_pem,
-            authority_pem,
-        } = app.sign_certificate(&new.serialize_request_pem()?).await?;
-        let priv_key_der = new.serialize_private_key_der();
-        let this = Self {
-            priv_key_der,
-            chain_pem: client_chain_pem,
-            authority_pem,
-        };
-        Ok(this)
-    }
-}
-
-pub fn socket_certificate<App: Application>(app: &App) -> rcgen::Certificate {
-    let hostname = app.identity_to_dns(app.identity());
-    let mut params = rcgen::CertificateParams::new([hostname]);
-    let now = chrono::Utc::now();
-    params.not_before = now;
-    params.not_after = now + chrono::Duration::days(30);
-    rcgen::Certificate::from_params(params)
-        .expect("Failed to create socket certificate")
-}
 
 #[derive(Clone, Copy, Debug, Default)]
 struct PeerVerified;
 
 #[must_use]
+#[deny(unused)]
 fn verify_peer(
     connection: &Connection,
     hostname: &str,

@@ -10,16 +10,36 @@
 //!
 //! The example uses process ids as identity values.
 
-use std::{future::Ready, io::Write, path::PathBuf, sync::Arc};
+use std::{io::Write, sync::Arc, time::Duration};
 
 use futures_util::stream::StreamExt;
 
-use correspondent::{CertificateResponse, Event, Socket};
+use correspondent::{
+    CertificateResponse, Event, IdentityCanonicalizer, SocketBuilder,
+};
 
 // These certificates are publicly available, and should not be used for
 // real applications
 const CA_CERT: &str = include_str!("debug-cert.pem");
 const CA_KEY_PK8: &[u8] = include_bytes!("debug-cert.pk8");
+
+pub struct ProcessIdCanonicalizer;
+
+impl IdentityCanonicalizer for ProcessIdCanonicalizer {
+    type Identity = u32;
+
+    fn to_dns(&self, id: &Self::Identity) -> String {
+        format!("id-{}.example.com", id)
+    }
+
+    fn to_txt(&self, id: &Self::Identity) -> Vec<u8> {
+        id.to_string().into_bytes()
+    }
+
+    fn parse_txt(&self, txt: &[u8]) -> Option<Self::Identity> {
+        std::str::from_utf8(txt).ok()?.parse().ok()
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -29,18 +49,43 @@ async fn main() {
         rcgen::CertificateParams::from_ca_cert_pem(CA_CERT, ca_key).unwrap();
     let ca_cert = rcgen::Certificate::from_params(params).unwrap();
 
+    // get the current process id
     let process_id = std::process::id();
 
+    // utility closure to re-show the prompt after printing
     let show_prompt = move || {
         print!("{}: ", process_id);
         let _ = std::io::stdout().flush();
     };
 
-    let app = Application {
-        process_id,
-        ca_cert,
-    };
-    let (socket, mut events) = Socket::start(Arc::new(app)).await.unwrap();
+    // configure correspondent socket
+    let mut builder = SocketBuilder::new()
+        .with_identity(process_id, ProcessIdCanonicalizer)
+        .with_service_name("Correspondent Chat Example".to_string())
+        .with_default_socket()
+        .expect("Failed to bind UDP socket")
+        .with_default_endpoint_cfg()
+        .with_new_certificate(chrono::Duration::days(1), |csr: &str| {
+            let csr = csr.to_string();
+            std::future::ready((|| -> Result<_, Box<rcgen::RcgenError>> {
+                let csr = rcgen::CertificateSigningRequest::from_pem(&csr)?;
+                let chain_pem = csr.serialize_pem_with_signer(&ca_cert)?;
+                Ok(CertificateResponse {
+                    chain_pem,
+                    authority_pem: CA_CERT.to_string(),
+                })
+            })())
+        })
+        .await
+        .expect("Failed to setup socket certificate");
+
+    // Recomend setting a keep-alive for at least one side of the connections.
+    Arc::get_mut(&mut builder.client_cfg.transport)
+        .expect("there should not be any other references at this point")
+        .keep_alive_interval(Some(Duration::from_secs(5)));
+
+    let (socket, mut events) =
+        builder.start().expect("Failed to start socket");
     let _ = tokio::join!(
         tokio::task::spawn_blocking(move || {
             use std::io::BufRead;
@@ -74,62 +119,10 @@ async fn main() {
                             }
                         });
                     }
-                    Event::BiStream(..) => {
-                        // not used
-                    }
+                    _ => (),
                 }
             }
         })
     );
     println!();
-}
-
-pub struct Application {
-    process_id: u32,
-    ca_cert: rcgen::Certificate,
-}
-
-impl correspondent::Application for Application {
-    fn application_data_dir(&self) -> PathBuf {
-        let mut path = PathBuf::from(file!());
-        path.set_file_name("data-dir");
-        path
-    }
-
-    type Identity = u32;
-
-    fn identity(&self) -> &Self::Identity {
-        &self.process_id
-    }
-
-    fn identity_to_dns(&self, id: &Self::Identity) -> String {
-        format!("id-{}.example.com", id)
-    }
-
-    fn identity_to_txt(&self, id: &Self::Identity) -> Vec<u8> {
-        id.to_string().into_bytes()
-    }
-
-    fn identity_from_txt(&self, txt: &[u8]) -> Option<Self::Identity> {
-        std::str::from_utf8(txt).ok()?.parse().ok()
-    }
-
-    type SigningError = rcgen::RcgenError;
-    type SigningFuture = Ready<Result<CertificateResponse, rcgen::RcgenError>>;
-
-    fn sign_certificate(&self, csr_pem: &str) -> Self::SigningFuture {
-        std::future::ready((|| {
-            let csr = rcgen::CertificateSigningRequest::from_pem(csr_pem)?;
-            let client_chain_pem =
-                csr.serialize_pem_with_signer(&self.ca_cert)?;
-            Ok(CertificateResponse {
-                client_chain_pem,
-                authority_pem: CA_CERT.to_string(),
-            })
-        })())
-    }
-
-    fn service_name(&self) -> String {
-        "Correspondent Example Service".to_string()
-    }
 }

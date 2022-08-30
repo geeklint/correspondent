@@ -15,15 +15,10 @@ use {
 };
 
 use crate::{
-    application::IdentityCanonicalizer,
-    nsd::NsdManager,
-    peer::start_peer,
-    socket_builder::SocketBuilderComplete,
-    util::{send_buf, ConnectionSet},
-    PeerId, PeerNotConnected,
+    application::IdentityCanonicalizer, nsd::NsdManager, peer::start_peer,
+    socket_builder::SocketBuilderComplete, PeerId, PeerNotConnected,
 };
 
-pub(crate) type PeerList<T> = Arc<Mutex<ConnectionSet<T>>>;
 pub(crate) type ActiveConnections<T> =
     Arc<Mutex<HashMap<(T, u64), Connection>>>;
 
@@ -39,7 +34,6 @@ pub struct Socket<T: IdentityCanonicalizer> {
     pub(crate) identity: Arc<Identity<T>>,
     pub(crate) discovery_addr: Option<IpAddr>,
     endpoint: Endpoint,
-    peers: PeerList<T::Identity>,
     active_connections: ActiveConnections<T::Identity>,
     runtime: tokio::runtime::Handle,
     post_event: tokio::sync::mpsc::UnboundedSender<InternalEvent<T::Identity>>,
@@ -53,24 +47,12 @@ impl<T: IdentityCanonicalizer> Clone for Socket<T> {
             identity: Arc::clone(&self.identity),
             discovery_addr: self.discovery_addr,
             endpoint: self.endpoint.clone(),
-            peers: Arc::clone(&self.peers),
             active_connections: Arc::clone(&self.active_connections),
             runtime: self.runtime.clone(),
             post_event: self.post_event.clone(),
             nsd_manager: Arc::clone(&self.nsd_manager),
         }
     }
-}
-
-macro_rules! send_to_many {
-    ($connections:expr, $buf:expr $(,)?) => {{
-        use ::futures_util::stream::{FuturesUnordered, StreamExt};
-        let mut set = FuturesUnordered::new();
-        for conn in Iterator::cloned($connections) {
-            set.push($crate::util::send_buf(conn, $buf));
-        }
-        async move { while let Some(()) = set.next().await {} }
-    }};
 }
 
 impl<T: IdentityCanonicalizer> Socket<T> {
@@ -87,8 +69,6 @@ impl<T: IdentityCanonicalizer> Socket<T> {
         endpoint.set_default_client_config(builder.client_cfg);
         let identity = Arc::new(builder.identity);
         let identity2 = Arc::clone(&identity);
-        let peers = PeerList::default();
-        let peers2 = Arc::clone(&peers);
         let active_connections = ActiveConnections::default();
         let active_connections2 = Arc::clone(&active_connections);
         let (post_event, mut recv_event) =
@@ -103,14 +83,12 @@ impl<T: IdentityCanonicalizer> Socket<T> {
             incoming
                 .filter_map(move |connecting| {
                     let identity2 = Arc::clone(&identity2);
-                    let peers2 = Arc::clone(&peers2);
                     let active_connections2 = Arc::clone(&active_connections2);
                     async move {
                         start_peer(
                             identity2,
                             connecting,
                             instance_id,
-                            peers2,
                             active_connections2,
                         )
                         .await
@@ -125,7 +103,6 @@ impl<T: IdentityCanonicalizer> Socket<T> {
             identity,
             discovery_addr: builder.discovery_addr,
             endpoint,
-            peers,
             active_connections,
             runtime: tokio::runtime::Handle::current(),
             post_event,
@@ -184,7 +161,6 @@ impl<T: IdentityCanonicalizer> Socket<T> {
                 Arc::clone(&self.identity),
                 connecting,
                 self.instance_id,
-                Arc::clone(&self.peers),
                 Arc::clone(&self.active_connections),
             )
             .await?;
@@ -218,80 +194,6 @@ impl<T: IdentityCanonicalizer> Socket<T> {
             }
         }
         Err(PeerNotConnected)
-    }
-
-    /// Open a unidirectional stream to a specific peer
-    pub async fn open_uni(
-        &self,
-        target: PeerId<T::Identity>,
-    ) -> Result<quinn::SendStream, PeerNotConnected> {
-        let peers = Arc::clone(&self.peers);
-        let connection = {
-            let guard = peers.lock().await;
-            guard
-                .get_connection(target.identity, target.unique)
-                .ok_or(PeerNotConnected)?
-        };
-        connection.open_uni().await.map_err(|_e| PeerNotConnected)
-    }
-
-    /// Open a bidirectional stream to a specific peer
-    pub async fn open_bi(
-        &self,
-        target: PeerId<T::Identity>,
-    ) -> Result<(quinn::SendStream, quinn::RecvStream), PeerNotConnected> {
-        let peers = Arc::clone(&self.peers);
-        let connection = {
-            let guard = peers.lock().await;
-            guard
-                .get_connection(target.identity, target.unique)
-                .ok_or(PeerNotConnected)?
-        };
-        connection.open_bi().await.map_err(|_e| PeerNotConnected)
-    }
-
-    /// Send a message to all connected peers with the specified identity
-    pub fn send_to(&self, target: T::Identity, msg: Vec<u8>) {
-        let peers = Arc::clone(&self.peers);
-        self.runtime.spawn(async move {
-            let sending;
-            {
-                let guard = peers.lock().await;
-                sending = send_to_many!(guard.connections(target), &msg);
-            }
-            sending.await;
-        });
-    }
-
-    /// Send a message to a specific peer with the given id
-    pub fn send_to_id(&self, target: PeerId<T::Identity>, msg: Vec<u8>) {
-        let peers = Arc::clone(&self.peers);
-        self.runtime.spawn(async move {
-            let sending;
-            {
-                let guard = peers.lock().await;
-                sending = match guard
-                    .get_connection(target.identity, target.unique)
-                {
-                    Some(conn) => send_buf(conn, &msg),
-                    None => return,
-                };
-            }
-            sending.await;
-        });
-    }
-
-    /// Send a message to all connected peers.
-    pub fn send_to_all(&self, msg: Vec<u8>) {
-        let peers = Arc::clone(&self.peers);
-        self.runtime.spawn(async move {
-            let sending;
-            {
-                let guard = peers.lock().await;
-                sending = send_to_many!(guard.iter(), &msg);
-            }
-            sending.await;
-        });
     }
 }
 

@@ -12,8 +12,7 @@ use {
 use crate::{
     application::IdentityCanonicalizer,
     socket::{
-        ActiveConnections, Event, Identity, InternalEvent,
-        InternalEventStream, PeerList,
+        ActiveConnections, Event, Identity, InternalEvent, InternalEventStream,
     },
 };
 
@@ -36,7 +35,6 @@ pub(crate) async fn start_peer<T: IdentityCanonicalizer>(
     identity: Arc<Identity<T>>,
     connecting: Connecting,
     our_instance_id: u64,
-    peer_list: PeerList<T::Identity>,
     active_connections: ActiveConnections<T::Identity>,
 ) -> Result<
     (PeerId<T::Identity>, InternalEventStream<T::Identity>),
@@ -120,12 +118,7 @@ pub(crate) async fn start_peer<T: IdentityCanonicalizer>(
         unique: connection.stable_id(),
     };
 
-    peer_list
-        .lock()
-        .await
-        .insert(hello.clone(), connection.clone());
-
-    use crate::util::insert::StreamInsertExt;
+    use crate::util::StreamInsertExt;
 
     Ok((
         peer_id.clone(),
@@ -164,11 +157,9 @@ pub(crate) async fn start_peer<T: IdentityCanonicalizer>(
             InternalEvent::Event(Event::PeerGone(peer_id.clone()))
         }))
         .insert_boxed({
-            let connection = connection.clone();
+            let _connection = connection;
             async move {
-                let mut peer_list_guard = peer_list.lock().await;
                 let mut active_conn_guard = active_connections.lock().await;
-                peer_list_guard.remove(hello, &connection);
                 active_conn_guard.remove(&peer_instance_id);
             }
         })

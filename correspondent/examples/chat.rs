@@ -10,12 +10,16 @@
 //!
 //! The example uses process ids as identity values.
 
-use std::{io::Write, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap, io::Write, sync::Arc, sync::Mutex, time::Duration,
+};
 
 use futures_util::stream::StreamExt;
 
+use quinn::Connection;
+
 use correspondent::{
-    CertificateResponse, Event, IdentityCanonicalizer, SocketBuilder,
+    CertificateResponse, Event, IdentityCanonicalizer, PeerId, SocketBuilder,
 };
 
 // These certificates are publicly available, and should not be used for
@@ -84,6 +88,10 @@ async fn main() {
         .expect("there should not be any other references at this point")
         .keep_alive_interval(Some(Duration::from_secs(5)));
 
+    let connection_set_send: Arc<Mutex<HashMap<PeerId<u32>, Connection>>> =
+        Arc::default();
+    let connection_set_recv = Arc::clone(&connection_set_send);
+
     let (socket, mut events) =
         builder.start().expect("Failed to start socket");
     let _ = tokio::join!(
@@ -94,7 +102,19 @@ async fn main() {
             let mut lines = stdin.lock().lines();
             show_prompt();
             while let Some(Ok(line)) = lines.next() {
-                socket.send_to_all(line.into_bytes());
+                let current_peers: Vec<Connection> = {
+                    let current_peers = connection_set_send.lock().unwrap();
+                    current_peers.values().cloned().collect()
+                };
+                for conn in current_peers {
+                    let line = line.clone();
+                    tokio::spawn(async move {
+                        let mut stream = conn.open_uni().await.ok()?;
+                        stream.write_all(line.as_bytes()).await.ok()?;
+                        stream.finish().await.ok()?;
+                        Some(())
+                    });
+                }
                 show_prompt();
             }
             socket.endpoint().close(0u8.into(), b"");
@@ -103,11 +123,23 @@ async fn main() {
         tokio::spawn(async move {
             while let Some(event) = events.next().await {
                 match event {
-                    Event::NewPeer(peer_id, _connection) => {
+                    Event::NewPeer(peer_id, connection) => {
+                        {
+                            connection_set_recv
+                                .lock()
+                                .unwrap()
+                                .insert(peer_id, connection);
+                        }
                         println!("\r{} joined.", peer_id.identity);
                         show_prompt();
                     }
                     Event::PeerGone(peer_id) => {
+                        {
+                            connection_set_recv
+                                .lock()
+                                .unwrap()
+                                .remove(&peer_id);
+                        }
                         println!("\r{} left.", peer_id.identity);
                         show_prompt();
                     }

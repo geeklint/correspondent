@@ -12,18 +12,18 @@ license = "Apache-2.0 OR MIT OR Zlib"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-chrono = "0.4"
 futures-util = { version = "0.3", features = ["channel"] }
 pem = "1.1.0"
 quinn = { version = "0.8.4", default-features = false, features = ["tls-rustls"] }
 rand = "0.8"
-rcgen = { version = "0.8.6", features = ["pem", "x509-parser"] }
+rcgen = { version = "0.9.3", features = ["pem", "x509-parser"] }
 rustls = "0.20.6"
-rustls-pemfile = "0.2.1"
+rustls-pemfile = "1.0.1"
 socket2 = "0.4.6"
+time = "0.3.14"
 tokio = { version = "1.0", features = ["full"] }
 webpki = "0.22"
-x509-parser = "0.9"
+x509-parser = "0.14.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus = "0.9"

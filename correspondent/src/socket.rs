@@ -35,7 +35,6 @@ pub struct Socket<T: IdentityCanonicalizer> {
     pub(crate) discovery_addr: Option<IpAddr>,
     endpoint: Endpoint,
     active_connections: ActiveConnections<T::Identity>,
-    runtime: tokio::runtime::Handle,
     post_event: tokio::sync::mpsc::UnboundedSender<InternalEvent<T::Identity>>,
     nsd_manager: Arc<NsdManager>,
 }
@@ -48,7 +47,6 @@ impl<T: IdentityCanonicalizer> Clone for Socket<T> {
             discovery_addr: self.discovery_addr,
             endpoint: self.endpoint.clone(),
             active_connections: Arc::clone(&self.active_connections),
-            runtime: self.runtime.clone(),
             post_event: self.post_event.clone(),
             nsd_manager: Arc::clone(&self.nsd_manager),
         }
@@ -104,7 +102,6 @@ impl<T: IdentityCanonicalizer> Socket<T> {
             discovery_addr: builder.discovery_addr,
             endpoint,
             active_connections,
-            runtime: tokio::runtime::Handle::current(),
             post_event,
             // pass a socket with an empty nsd mananger into the nsd mananger,
             // so as to avoid circular references
@@ -128,13 +125,8 @@ impl<T: IdentityCanonicalizer> Socket<T> {
     }
 
     /// Try to get the port this socket is operating on.
-    pub fn port(&self) -> Option<u16> {
+    pub(crate) fn port(&self) -> Option<u16> {
         self.endpoint.local_addr().ok().map(|addr| addr.port())
-    }
-
-    /// Get a reference to the tokio runtime stored in this socket
-    pub fn runtime(&self) -> &tokio::runtime::Handle {
-        &self.runtime
     }
 
     /// Manually connect to a specific peer

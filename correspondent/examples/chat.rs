@@ -69,17 +69,24 @@ async fn main() {
         .with_default_socket()
         .expect("Failed to bind UDP socket")
         .with_default_endpoint_cfg()
-        .with_new_certificate(chrono::Duration::days(1), |csr: &str| {
-            let csr = csr.to_string();
-            std::future::ready((|| -> Result<_, Box<rcgen::RcgenError>> {
-                let csr = rcgen::CertificateSigningRequest::from_pem(&csr)?;
-                let chain_pem = csr.serialize_pem_with_signer(&ca_cert)?;
-                Ok(CertificateResponse {
-                    chain_pem,
-                    authority_pem: CA_CERT.to_string(),
-                })
-            })())
-        })
+        .with_new_certificate(
+            Duration::from_secs(60 * 60 * 24),
+            |csr: &str| {
+                let csr = csr.to_string();
+                std::future::ready(
+                    (|| -> Result<_, Box<rcgen::RcgenError>> {
+                        let csr =
+                            rcgen::CertificateSigningRequest::from_pem(&csr)?;
+                        let chain_pem =
+                            csr.serialize_pem_with_signer(&ca_cert)?;
+                        Ok(CertificateResponse {
+                            chain_pem,
+                            authority_pem: CA_CERT.to_string(),
+                        })
+                    })(),
+                )
+            },
+        )
         .await
         .expect("Failed to setup socket certificate");
 

@@ -85,9 +85,11 @@ pub struct SocketBuilder<
     pub(crate) endpoint_cfg: EndpointConfig,
 
     /// [`ClientConfig`], if available, after configured by `with_certificate`
+    /// or `with_new_certificate`
     pub client_cfg: ClientConfig,
 
     /// [`ServerConfig`], if available, after configured by `with_certificate`
+    /// or `with_new_certificate`
     pub server_cfg: ServerConfig,
 }
 
@@ -308,7 +310,7 @@ where
     /// Generate a new certificate and use it for authenticating with peers.
     pub async fn with_new_certificate<S>(
         self,
-        valid_for: chrono::Duration,
+        valid_for: std::time::Duration,
         mut signer: S,
     ) -> Result<
         SocketBuilder<Identity<T>, SN, US, EC, ClientConfig, ServerConfig>,
@@ -321,7 +323,7 @@ where
         let hostname =
             self.identity.canonicalizer.to_dns(&self.identity.identity);
         let mut params = rcgen::CertificateParams::new([hostname]);
-        let now = chrono::Utc::now();
+        let now = time::OffsetDateTime::now_utc();
         params.not_before = now;
         params.not_after = now + valid_for;
         let new_cert = rcgen::Certificate::from_params(params)

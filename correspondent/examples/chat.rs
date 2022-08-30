@@ -87,6 +87,7 @@ async fn main() {
     let (socket, mut events) =
         builder.start().expect("Failed to start socket");
     let _ = tokio::join!(
+        // spawn a blocking task to handle stdin input
         tokio::task::spawn_blocking(move || {
             use std::io::BufRead;
             let stdin = std::io::stdin();
@@ -98,6 +99,7 @@ async fn main() {
             }
             socket.endpoint().close(0u8.into(), b"");
         }),
+        // spawn a regular task to handle events as they come in
         tokio::spawn(async move {
             while let Some(event) = events.next().await {
                 match event {

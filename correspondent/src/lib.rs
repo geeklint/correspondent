@@ -42,7 +42,6 @@
 #![warn(clippy::option_option)]
 #![warn(clippy::path_buf_push_overwrite)]
 #![warn(clippy::rc_buffer)]
-#![warn(clippy::redundant_pub_crate)]
 #![warn(clippy::ref_option_ref)]
 #![warn(clippy::rest_pat_in_fully_bound_structs)]
 #![warn(clippy::semicolon_if_nothing_returned)]
@@ -55,12 +54,14 @@
 
 mod application;
 mod nsd;
+mod peer;
 mod socket;
 mod socket_builder;
 mod util;
 
 pub use self::{
     application::IdentityCanonicalizer,
-    socket::{Event, Events, Peer, PeerId, Socket},
+    peer::{PeerId, PeerNotConnected},
+    socket::{Event, Events, Socket},
     socket_builder::{CertificateResponse, SocketBuilder, SocketCertificate},
 };

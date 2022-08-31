@@ -12,6 +12,11 @@ correspondent uses
 [DNS-SD](https://en.wikipedia.org/wiki/Zero-configuration_networking#DNS-based_service_discovery)
 to discover peers on the local network.
 
+correspondent uses [Quinn](https://github.com/quinn-rs/quinn), an
+implementation of the QUIC protocol, as a transport layer.
+
+See `correspondent/examples/chat.rs` for a simple example application.
+
 # Supported Services
 
 | Operating System | Service          |

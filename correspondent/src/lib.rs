@@ -10,6 +10,10 @@
 //! [DNS-SD](https://en.wikipedia.org/wiki/Zero-configuration_networking#DNS-based_service_discovery)
 //! to discover peers on the local network.
 //!
+//! correspondent uses [Quinn](https://github.com/quinn-rs/quinn), an
+//! implementation of the QUIC protocol, as a transport layer.  These docs may
+//! assume some familiarity with Quinn's API.
+//!
 //! See `examples/chat.rs` for a simple example application.
 //!
 //! # Supported Services
@@ -62,5 +66,8 @@ pub use self::{
     application::IdentityCanonicalizer,
     peer::{PeerId, PeerNotConnected},
     socket::{Event, Events, Socket},
-    socket_builder::{CertificateResponse, SocketBuilder, SocketCertificate},
+    socket_builder::{
+        CertificateResponse, CertificateSigner, SocketBuilder,
+        SocketCertificate,
+    },
 };

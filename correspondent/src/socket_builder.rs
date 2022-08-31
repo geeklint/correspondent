@@ -126,7 +126,7 @@ impl
 {
     /// Creates blank SocketBuilder ready for configuration
     ///
-    /// All options must be specified before calling [`build`].
+    /// All options must be specified before calling [`start`](SocketBuilder::start).
     pub fn new() -> Self {
         SocketBuilder {
             identity: NoIdentity,
@@ -359,7 +359,7 @@ pub enum CertificateGenerationError<T> {
     Config(rustls::Error),
 }
 
-/// Type to return from CertificateSigner::sign_certificate.
+/// Type to return from [`CertificateSigner::sign_certificate`].
 #[derive(Clone, Debug)]
 pub struct CertificateResponse {
     /// PEM-formatted signed certificate chain.
@@ -370,7 +370,10 @@ pub struct CertificateResponse {
     pub authority_pem: String,
 }
 
+/// Used by [`SocketBuilder::with_new_certificate`] to sign the newly generated
+/// certificate.
 pub trait CertificateSigner {
+    /// Error type if signing failed.
     type SigningError;
 
     /// Future for signing certificate.

@@ -10,8 +10,7 @@
 //! [DNS-SD](https://en.wikipedia.org/wiki/Zero-configuration_networking#DNS-based_service_discovery)
 //! to discover peers on the local network.
 //!
-//! To use correspondent, define an [`Application`](Application) type, and
-//! create a [`Socket`](Socket) with it.
+//! See `examples/chat.rs` for a simple example application.
 //!
 //! # Supported Services
 //!

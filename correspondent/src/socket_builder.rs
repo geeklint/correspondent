@@ -12,7 +12,7 @@ use quinn::{ClientConfig, EndpointConfig, ServerConfig};
 
 use crate::{application::IdentityCanonicalizer, socket::Identity};
 
-/// Required information on how to authenticate with peers.
+/// Required information correspondent uses to verify the identity of peers
 pub struct SocketCertificate {
     /// Private key the socket to be created should use.
     pub priv_key: rustls::PrivateKey,
@@ -25,7 +25,9 @@ pub struct SocketCertificate {
 }
 
 impl SocketCertificate {
-    /// Create a SocketCertificate from PEM and DER serialized forms.
+    /// Deserialize a SocketCertificate from PEM and DER formats.
+    ///
+    /// PEM is used for certificate data and DER is used for private key data.
     pub fn from_data(
         priv_key_der: Vec<u8>,
         chain_pem: String,

@@ -28,7 +28,8 @@ pub struct Identity<T: IdentityCanonicalizer> {
     pub(crate) canonicalizer: T,
 }
 
-/// A socket handles connections and messages.
+/// A socket represents an endpoint and other state correspondent uses to
+/// connect to peers.
 pub struct Socket<T: IdentityCanonicalizer> {
     pub(crate) instance_id: u64,
     pub(crate) identity: Arc<Identity<T>>,

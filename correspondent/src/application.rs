@@ -6,7 +6,7 @@ use std::hash::Hash;
 /// A correspondent socket must be created with a specific identity.
 ///
 /// The identity is used to communicate with other peers who you are.
-/// `Correspondent` does not assume identities are unique - the PeerId type
+/// `correspondent` does not assume identities are unique - the PeerId type
 /// passed into the event handlers may contain the same identity without itself
 /// comparing equal.  Suggested choices for Identity include:
 ///

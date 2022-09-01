@@ -386,7 +386,7 @@ pub trait CertificateSigner {
     fn sign_certificate(&mut self, csr_pem: &str) -> Self::SigningFuture;
 
     /// Save the private key (e.g. to disk) so it can be used to create future
-    /// sockets.  Saving private keys to a public place may compromise security.
+    /// sockets. Saving private keys to a public place may compromise security.
     fn save_private_key(&mut self, key: &[u8]) {
         let _ = key;
     }

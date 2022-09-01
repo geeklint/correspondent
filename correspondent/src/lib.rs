@@ -11,7 +11,7 @@
 //! to discover peers on the local network.
 //!
 //! correspondent uses [Quinn](https://github.com/quinn-rs/quinn), an
-//! implementation of the QUIC protocol, as a transport layer.  These docs may
+//! implementation of the QUIC protocol, as a transport layer. These docs may
 //! assume some familiarity with Quinn's API.
 //!
 //! See `examples/chat.rs` for a simple example application.

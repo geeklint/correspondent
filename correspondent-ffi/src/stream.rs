@@ -50,12 +50,12 @@ pub struct StreamHandlerVTable {
     pub max_chunk_size: usize,
 
     /// If this value is non-zero, the stream will always operate in unordered
-    /// mode, including the first chunk.  If the handler returns
+    /// mode, including the first chunk. If the handler returns
     /// ContinueOrdered, it will be ignored.
     pub always_unordered: usize,
 
     /// This function is called when there is no more data available in
-    /// the stream.  If the stream finished naturally, the error will be null.
+    /// the stream. If the stream finished naturally, the error will be null.
     ///
     /// This function is responsible for cleaning up any resources associated
     /// with the StreamHandler, it will not be used again.
@@ -77,7 +77,7 @@ pub struct StreamHandlerVTable {
     ///
     /// The return value should be a member of the [`HandleChunkResult`] enum.
     ///
-    /// Offset is the offset of the chunk of data within the stream.  As long
+    /// Offset is the offset of the chunk of data within the stream. As long
     /// as the stream handler returns `ContinueOrdered`, these offsets will
     /// indicate data immediately following the previous chunk.
     ///
@@ -167,7 +167,7 @@ pub struct StreamWriterVTable {
     pub chunk_size: usize,
 
     /// This function is called after write_data returns 0, or an error occurs
-    /// while writing to the stream.  To avoid a memory leak, `cleanup` should
+    /// while writing to the stream. To avoid a memory leak, `cleanup` should
     /// de-allocated all the resources associated with this v-table.
     ///
     /// # Safety
@@ -178,7 +178,7 @@ pub struct StreamWriterVTable {
     pub cleanup: extern "C" fn(obj: *mut StreamWriterVTable),
 
     /// This function is called to populate a buffer with data to be written to
-    /// the stream.  The return value should be the number of bytes written to
+    /// the stream. The return value should be the number of bytes written to
     /// the buffer. If the return value is 0, cleanup will be called.
     ///
     /// # Safety
@@ -189,7 +189,7 @@ pub struct StreamWriterVTable {
     /// function must not write more than `chunk_size` bytes to the buffer.
     ///
     /// The `data` pointer is valid only for the duration of this function
-    /// call.  Implementors should make a copy of the pointed-to data if they
+    /// call. Implementors should make a copy of the pointed-to data if they
     /// need access after the function has returned.
     ///
     /// This function must tolerate being called from an arbitrary thread.

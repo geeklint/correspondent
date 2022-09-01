@@ -76,7 +76,7 @@ pub struct ApplicationVTable {
     pub dns_suffix_len: usize,
 
     /// This function is called by the library when it is done using the
-    /// contents of this v-table.  To avoid a memory leak, `cleanup` should
+    /// contents of this v-table. To avoid a memory leak, `cleanup` should
     /// de-allocate all the memory associated with the v-table.
     ///
     /// # Safety

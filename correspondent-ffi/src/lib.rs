@@ -25,7 +25,6 @@
 #![warn(clippy::option_option)]
 #![warn(clippy::path_buf_push_overwrite)]
 #![warn(clippy::rc_buffer)]
-#![warn(clippy::redundant_pub_crate)]
 #![warn(clippy::ref_option_ref)]
 #![warn(clippy::rest_pat_in_fully_bound_structs)]
 #![warn(clippy::semicolon_if_nothing_returned)]
@@ -79,7 +78,9 @@ pub extern "C" fn version() -> *const c_char {
 /// To avoid a memory leak, the returned pointer (if not null) must be cleaned
 /// up with [`socket_free`].
 #[export_name = "correspondent_start"]
-pub unsafe extern "C" fn start(app: *const ApplicationVTable) -> *mut Socket {
+pub unsafe extern "C" fn start(
+    app: *const ApplicationVTable,
+) -> *const Socket {
     socket::start(app)
 }
 
@@ -184,7 +185,7 @@ pub unsafe extern "C" fn socket_start_stream_to_id(
 /// [`socket_free`] after this function.
 #[export_name = "correspondent_socket_close"]
 pub unsafe extern "C" fn socket_close(
-    socket: *mut Socket,
+    socket: *const Socket,
     code: u32,
     msg: *const u8,
     msg_len: usize,
@@ -201,9 +202,9 @@ pub unsafe extern "C" fn socket_close(
 /// `socket` must point to a valid socket previously returned from a call to
 /// [`start`], and must not be used again after this call.
 #[export_name = "correspondent_socket_free"]
-pub unsafe extern "C" fn socket_free(socket: *mut Socket) {
+pub unsafe extern "C" fn socket_free(socket: *const Socket) {
     if !socket.is_null() {
-        Box::from_raw(socket);
+        std::sync::Arc::from_raw(socket);
     }
 }
 

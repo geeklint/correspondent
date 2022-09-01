@@ -4,7 +4,7 @@
 use std::{
     ffi::{c_void, CStr, CString},
     os::raw::c_char,
-    path::PathBuf,
+    sync::Arc,
 };
 
 use tokio::sync::oneshot;
@@ -196,17 +196,16 @@ impl SigningContext {
             if client_chain_pem.is_null() || authority_pem.is_null() {
                 return;
             }
-            let client_chain_pem =
-                match CStr::from_ptr(client_chain_pem).to_str() {
-                    Ok(s) => s.to_string(),
-                    Err(_) => return,
-                };
+            let chain_pem = match CStr::from_ptr(client_chain_pem).to_str() {
+                Ok(s) => s.to_string(),
+                Err(_) => return,
+            };
             let authority_pem = match CStr::from_ptr(authority_pem).to_str() {
                 Ok(s) => s.to_string(),
                 Err(_) => return,
             };
             let _ = self.send.send(correspondent::CertificateResponse {
-                client_chain_pem,
+                chain_pem,
                 authority_pem,
             });
         }
@@ -233,8 +232,8 @@ pub struct PeerId {
 }
 
 pub struct Application {
-    identity: String,
-    dns_suffix: String,
+    pub(crate) identity: String,
+    pub(crate) dns_suffix: String,
     vtable: ApplicationVTable,
 }
 
@@ -303,7 +302,14 @@ impl Drop for Application {
     }
 }
 
-impl correspondent::Application for Application {
+pub(crate) struct StringIdCanonicalizer {
+    pub dns_suffix: String,
+}
+
+pub(crate) struct AppCertSigner(pub Arc<Application>);
+
+impl correspondent::IdentityCanonicalizer for StringIdCanonicalizer {
+    /*
     fn application_data_dir(&self) -> PathBuf {
         assert!(!self.vtable.application_data_dir.is_null());
         let bytes = unsafe {
@@ -319,36 +325,35 @@ impl correspondent::Application for Application {
     fn service_name(&self) -> String {
         vtable_string!(self.vtable, service_name, service_name_len)
     }
+    */
 
     type Identity = String;
 
-    fn identity(&self) -> &String {
-        &self.identity
-    }
-
-    fn identity_to_dns(&self, id: &String) -> String {
+    fn to_dns(&self, id: &String) -> String {
         format!("{}{}", id, self.dns_suffix)
     }
 
-    fn identity_to_txt(&self, id: &String) -> Vec<u8> {
+    fn to_txt(&self, id: &String) -> Vec<u8> {
         id.as_bytes().to_vec()
     }
 
-    fn identity_from_txt(&self, txt: &[u8]) -> Option<String> {
+    fn parse_txt(&self, txt: &[u8]) -> Option<String> {
         std::str::from_utf8(txt).ok().map(String::from)
     }
+}
 
+impl correspondent::CertificateSigner for AppCertSigner {
     type SigningError = oneshot::error::RecvError;
 
     type SigningFuture = oneshot::Receiver<correspondent::CertificateResponse>;
 
-    fn sign_certificate(&self, csr_pem: &str) -> Self::SigningFuture {
+    fn sign_certificate(&mut self, csr_pem: &str) -> Self::SigningFuture {
         let c_str =
             CString::new(csr_pem).expect("PEM-formatted CSR contained null");
         let (send, recv) = oneshot::channel();
         let ctx = Box::new(SigningContext { send });
-        (self.vtable.sign_certificate)(
-            self.vtable.obj,
+        (self.0.vtable.sign_certificate)(
+            self.0.vtable.obj,
             c_str.as_ptr(),
             Box::into_raw(ctx),
         );

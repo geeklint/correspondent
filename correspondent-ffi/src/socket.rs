@@ -1,19 +1,26 @@
 /* SPDX-License-Identifier: (Apache-2.0 OR MIT OR Zlib) */
 /* Copyright © 2021 Violet Leonard */
 
-use std::sync::{
-    mpsc::{channel, Sender},
-    Arc,
-};
+use std::{collections::HashMap, sync::Arc, sync::RwLock, time::Duration};
+
+use futures_util::stream::FuturesUnordered;
+use quinn::Connection;
+use tokio::sync::oneshot::{channel, Sender};
+
+use correspondent::PeerId;
 
 use crate::{
-    application::{Application, ApplicationVTable},
+    application::{
+        AppCertSigner, Application, ApplicationVTable, StringIdCanonicalizer,
+    },
     StreamWriterVTable,
 };
 
 /// Representation of a correspondent socket.
 pub struct Socket {
-    inner: correspondent::Socket<Application>,
+    inner: correspondent::Socket<StringIdCanonicalizer>,
+    runtime: tokio::runtime::Handle,
+    current_peers: RwLock<HashMap<PeerId<String>, Connection>>,
 }
 
 impl Socket {
@@ -28,10 +35,36 @@ impl Socket {
             return;
         }
         let id_bytes = std::slice::from_raw_parts(id, id_len);
-        let msg_bytes = std::slice::from_raw_parts(msg, msg_len);
-        if let Ok(id_str) = std::str::from_utf8(id_bytes) {
-            self.inner.send_to(id_str.to_string(), msg_bytes.to_vec());
-        }
+        let id_str = match std::str::from_utf8(id_bytes) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let msg_bytes = std::slice::from_raw_parts(msg, msg_len).to_vec();
+        let connections: Vec<_> = {
+            self.current_peers
+                .read()
+                .expect("mutex was poisoned")
+                .iter()
+                .filter_map(|(peer_id, conn)| {
+                    (peer_id.identity == id_str).then_some(conn)
+                })
+                .cloned()
+                .collect()
+        };
+        self.runtime.spawn(async move {
+            use futures_util::StreamExt;
+            let msg_bytes = &msg_bytes;
+            let mut futures: FuturesUnordered<_> = connections
+                .into_iter()
+                .map(|conn| async move {
+                    let mut stream = conn.open_uni().await.ok()?;
+                    stream.write_all(msg_bytes).await.ok()?;
+                    stream.finish().await.ok()?;
+                    Some(())
+                })
+                .collect();
+            while (futures.next().await).is_some() {}
+        });
     }
 
     pub(crate) unsafe fn send_to_id(
@@ -54,16 +87,54 @@ impl Socket {
         } else {
             return;
         };
-        let msg_bytes = std::slice::from_raw_parts(msg, msg_len);
-        self.inner.send_to_id(peer_id, msg_bytes.to_vec());
+        let msg_bytes = std::slice::from_raw_parts(msg, msg_len).to_vec();
+        let connection = {
+            match self
+                .current_peers
+                .read()
+                .expect("mutex was poisoned")
+                .get(&peer_id)
+                .cloned()
+            {
+                Some(conn) => conn,
+                None => return,
+            }
+        };
+        self.runtime.spawn(async move {
+            let mut stream = connection.open_uni().await.ok()?;
+            stream.write_all(&msg_bytes).await.ok()?;
+            stream.finish().await.ok()?;
+            Some(())
+        });
     }
 
     pub(crate) unsafe fn send_to_all(&self, msg: *const u8, msg_len: usize) {
         if msg.is_null() {
             return;
         }
-        let msg_bytes = std::slice::from_raw_parts(msg, msg_len);
-        self.inner.send_to_all(msg_bytes.to_vec());
+        let msg_bytes = std::slice::from_raw_parts(msg, msg_len).to_vec();
+        let connections: Vec<_> = {
+            self.current_peers
+                .read()
+                .expect("mutex was poisoned")
+                .values()
+                .cloned()
+                .collect()
+        };
+        self.runtime.spawn(async move {
+            use futures_util::StreamExt;
+            let msg_bytes = &msg_bytes;
+            let mut futures: FuturesUnordered<_> = connections
+                .into_iter()
+                .map(|conn| async move {
+                    let mut stream = conn.open_uni().await.ok()?;
+                    stream.write_all(msg_bytes).await.ok()?;
+                    stream.finish().await.ok()?;
+                    Some(())
+                })
+                .collect();
+            while (futures.next().await).is_some() {}
+        });
     }
 
     pub(crate) unsafe fn start_stream_to_id(
@@ -86,11 +157,22 @@ impl Socket {
         } else {
             return;
         };
-        let socket = self.inner.clone();
-        self.inner.runtime().spawn(async move {
+        let connection = {
+            match self
+                .current_peers
+                .read()
+                .expect("mutex was poisoned")
+                .get(&peer_id)
+                .cloned()
+            {
+                Some(conn) => conn,
+                None => return,
+            }
+        };
+        self.runtime.spawn(async move {
             use futures_util::TryFutureExt;
             let mut writer = writer;
-            let mut stream = socket.open_uni(peer_id).await.ok()?;
+            let mut stream = connection.open_uni().await.ok()?;
             let mut left = vec![0; writer.chunk_size()];
             let mut right = vec![0; writer.chunk_size()];
             let mut left_len = 0;
@@ -129,7 +211,7 @@ impl Socket {
     }
 }
 
-pub unsafe fn start(app: *const ApplicationVTable) -> *mut Socket {
+pub unsafe fn start(app: *const ApplicationVTable) -> *const Socket {
     if app.is_null() {
         return std::ptr::null_mut();
     }
@@ -142,34 +224,70 @@ pub unsafe fn start(app: *const ApplicationVTable) -> *mut Socket {
     std::thread::spawn(move || {
         network_thread(app, send);
     });
-    recv.recv()
-        .map(|inner| {
-            let socket = Socket { inner };
-            Box::into_raw(Box::new(socket))
-        })
-        .unwrap_or(std::ptr::null_mut())
+    recv.blocking_recv()
+        .map(Arc::into_raw)
+        .unwrap_or(std::ptr::null())
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn network_thread(
     app: Application,
-    sender: Sender<correspondent::Socket<Application>>,
-) {
+    sender: Sender<Arc<Socket>>,
+) -> Option<()> {
     use futures_util::StreamExt;
+
     let app = Arc::new(app);
-    let (socket, mut events) =
-        match correspondent::Socket::start(Arc::clone(&app)).await {
-            Ok(socket) => socket,
-            Err(_) => return,
-        };
-    let _ = sender.send(socket);
+
+    let mut builder = correspondent::SocketBuilder::new()
+        .with_identity(
+            app.identity.clone(),
+            StringIdCanonicalizer {
+                dns_suffix: app.dns_suffix.clone(),
+            },
+        )
+        .with_service_name("Correspondent Chat Example".to_string())
+        .with_default_socket()
+        .ok()?
+        .with_default_endpoint_cfg()
+        .with_new_certificate(
+            Duration::from_secs(60 * 60 * 24 /* = 1 day */),
+            AppCertSigner(Arc::clone(&app)),
+        )
+        .await
+        .ok()?;
+
+    Arc::get_mut(&mut builder.client_cfg.transport)
+        .expect("there should not be any other references at this point")
+        .keep_alive_interval(Some(Duration::from_secs(5)));
+
+    let (socket, mut events) = builder.start().ok()?;
+    let socket = Arc::new(Socket {
+        inner: socket,
+        runtime: tokio::runtime::Handle::current(),
+        current_peers: RwLock::default(),
+    });
+    let _ = sender.send(Arc::clone(&socket));
     while let Some(event) = events.next().await {
         use correspondent::Event;
         match event {
-            Event::NewPeer(peer_id, _connection) => {
+            Event::NewPeer(peer_id, connection) => {
+                {
+                    socket
+                        .current_peers
+                        .write()
+                        .expect("mutex was poisoned")
+                        .insert(peer_id.clone(), connection);
+                }
                 app.handle_new_peer(&peer_id);
             }
             Event::PeerGone(peer_id) => {
+                {
+                    socket
+                        .current_peers
+                        .write()
+                        .expect("mutex was poisoned")
+                        .remove(&peer_id);
+                }
                 app.handle_peer_gone(&peer_id);
             }
             Event::UniStream(peer_id, stream) => {
@@ -179,8 +297,10 @@ async fn network_thread(
             Event::BiStream(..) => {
                 // TODO: support bi streams in ffi?
             }
+            _ => {}
         }
     }
+    Some(())
 }
 
 async fn handle_stream(

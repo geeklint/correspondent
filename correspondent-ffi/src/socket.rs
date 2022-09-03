@@ -246,9 +246,8 @@ async fn network_thread(
             },
         )
         .with_service_name("Correspondent Chat Example".to_string())
-        .with_default_socket()
+        .with_recommended_socket()
         .ok()?
-        .with_default_endpoint_cfg()
         .with_new_certificate(
             Duration::from_secs(60 * 60 * 24 /* = 1 day */),
             AppCertSigner(Arc::clone(&app)),

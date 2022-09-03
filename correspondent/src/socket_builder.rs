@@ -95,22 +95,34 @@ pub struct SocketBuilder<
     pub server_cfg: ServerConfig,
 }
 
-pub type SocketBuilderComplete<T> = SocketBuilder<
+pub type SocketBuilderComplete<T, EC = EndpointConfig> = SocketBuilder<
     Identity<T>,
     ServiceName,
     UdpSocket,
-    EndpointConfig,
+    EC,
     ClientConfig,
     ServerConfig,
 >;
 
-impl<T: IdentityCanonicalizer> SocketBuilderComplete<T> {
+impl<T, EC> SocketBuilderComplete<T, EC>
+where
+    T: IdentityCanonicalizer,
+    EC: Into<EndpointConfig>,
+{
     /// Finishs building a socket and starts both the DNS-SD service and
     /// quic Endpoint.
     pub fn start(
         self,
     ) -> io::Result<(crate::Socket<T>, crate::Events<T::Identity>)> {
-        crate::Socket::start(self)
+        crate::Socket::start(SocketBuilder {
+            identity: self.identity,
+            service_name: self.service_name,
+            socket: self.socket,
+            discovery_addr: self.discovery_addr,
+            endpoint_cfg: self.endpoint_cfg.into(),
+            client_cfg: self.client_cfg,
+            server_cfg: self.server_cfg,
+        })
     }
 }
 
@@ -119,7 +131,7 @@ impl
         NoIdentity,
         NoServiceName,
         NoUdpSocket,
-        NoEndpointConfig,
+        DefaultEndpointConfig,
         NoClientConfig,
         NoServerConfig,
     >
@@ -133,7 +145,7 @@ impl
             service_name: NoServiceName,
             socket: NoUdpSocket,
             discovery_addr: None,
-            endpoint_cfg: NoEndpointConfig,
+            endpoint_cfg: DefaultEndpointConfig,
             client_cfg: NoClientConfig,
             server_cfg: NoServerConfig,
         }
@@ -145,7 +157,7 @@ impl Default
         NoIdentity,
         NoServiceName,
         NoUdpSocket,
-        NoEndpointConfig,
+        DefaultEndpointConfig,
         NoClientConfig,
         NoServerConfig,
     >
@@ -155,7 +167,7 @@ impl Default
     }
 }
 
-impl<Id, SN, US, EC, CC, SC> SocketBuilder<Id, SN, US, EC, CC, SC> {
+impl<SN, US, EC, CC, SC> SocketBuilder<NoIdentity, SN, US, EC, CC, SC> {
     /// Sets the identity the socket will have and the canonicalizer used
     /// to convert identities to the network format(s).
     pub fn with_identity<T: IdentityCanonicalizer>(
@@ -178,7 +190,9 @@ impl<Id, SN, US, EC, CC, SC> SocketBuilder<Id, SN, US, EC, CC, SC> {
             server_cfg: self.server_cfg,
         }
     }
+}
 
+impl<Id, US, EC, CC, SC> SocketBuilder<Id, NoServiceName, US, EC, CC, SC> {
     /// Sets the DNS-SD service name used by the socket to advertize itself
     /// on the local network.
     pub fn with_service_name(
@@ -195,7 +209,9 @@ impl<Id, SN, US, EC, CC, SC> SocketBuilder<Id, SN, US, EC, CC, SC> {
             server_cfg: self.server_cfg,
         }
     }
+}
 
+impl<Id, SN, EC, CC, SC> SocketBuilder<Id, SN, NoUdpSocket, EC, CC, SC> {
     /// Manually specifies a socket to use for the quic endpoint.
     ///
     /// This socket can be pre-configured with a crate like socket2, although
@@ -221,7 +237,7 @@ impl<Id, SN, US, EC, CC, SC> SocketBuilder<Id, SN, US, EC, CC, SC> {
     }
 
     /// Sets up the socket with the recomended settings.
-    pub fn with_default_socket(
+    pub fn with_recommended_socket(
         self,
     ) -> io::Result<SocketBuilder<Id, SN, UdpSocket, EC, CC, SC>> {
         use socket2::{Domain, Protocol, Socket, Type};
@@ -243,7 +259,11 @@ impl<Id, SN, US, EC, CC, SC> SocketBuilder<Id, SN, US, EC, CC, SC> {
             server_cfg: self.server_cfg,
         })
     }
+}
 
+impl<Id, SN, US, CC, SC>
+    SocketBuilder<Id, SN, US, DefaultEndpointConfig, CC, SC>
+{
     /// Specifies the config for the quic endpoint.
     pub fn with_endpoint_cfg(
         self,
@@ -259,17 +279,11 @@ impl<Id, SN, US, EC, CC, SC> SocketBuilder<Id, SN, US, EC, CC, SC> {
             server_cfg: self.server_cfg,
         }
     }
+}
 
-    /// Specifies the config for the quic endpoint with all default settings.
-    pub fn with_default_endpoint_cfg(
-        self,
-    ) -> SocketBuilder<Id, SN, US, EndpointConfig, CC, SC>
-    where
-        EndpointConfig: Default,
-    {
-        self.with_endpoint_cfg(EndpointConfig::default())
-    }
-
+impl<Id, SN, US, EC>
+    SocketBuilder<Id, SN, US, EC, NoClientConfig, NoServerConfig>
+{
     /// Specifies the socket should use the provided certificate and authority
     /// for authenticating with peers.
     pub fn with_certificate(
@@ -305,7 +319,8 @@ impl<Id, SN, US, EC, CC, SC> SocketBuilder<Id, SN, US, EC, CC, SC> {
     }
 }
 
-impl<T, SN, US, EC, CC, SC> SocketBuilder<Identity<T>, SN, US, EC, CC, SC>
+impl<T, SN, US, EC>
+    SocketBuilder<Identity<T>, SN, US, EC, NoClientConfig, NoServerConfig>
 where
     T: IdentityCanonicalizer,
 {
@@ -407,7 +422,16 @@ where
 pub struct NoIdentity;
 pub struct NoServiceName;
 pub struct NoUdpSocket;
-pub struct NoEndpointConfig;
+pub struct DefaultEndpointConfig;
 pub struct NoClientConfig;
 pub struct NoServerConfig;
 pub struct ServiceName(pub(crate) String);
+
+impl From<DefaultEndpointConfig> for EndpointConfig
+where
+    EndpointConfig: Default,
+{
+    fn from(_: DefaultEndpointConfig) -> Self {
+        EndpointConfig::default()
+    }
+}

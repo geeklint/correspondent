@@ -23,6 +23,8 @@ use correspondent::{
     SocketBuilder,
 };
 
+const ONE_DAY: Duration = Duration::from_secs(60 * 60 * 24);
+
 // These certificates are publicly available, and should not be used for
 // real applications
 const CA_CERT: &str = include_str!("debug-cert.pem");
@@ -59,39 +61,32 @@ fn show_prompt(process_id: u32) {
 
 #[tokio::main]
 async fn main() {
-    // Create the signing certificate from the debug-cert files
+    // Create the certificate signing callback from the debug-cert files
     let ca_key = rcgen::KeyPair::from_der(CA_KEY_PK8).unwrap();
     let params =
         rcgen::CertificateParams::from_ca_cert_pem(CA_CERT, ca_key).unwrap();
     let ca_cert = rcgen::Certificate::from_params(params).unwrap();
+    let certificate_signing_callback = |csr: &str| {
+        std::future::ready((|| -> Result<_, Box<rcgen::RcgenError>> {
+            let csr = rcgen::CertificateSigningRequest::from_pem(csr)?;
+            let chain_pem = csr.serialize_pem_with_signer(&ca_cert)?;
+            Ok(CertificateResponse {
+                chain_pem,
+                authority_pem: CA_CERT.to_string(),
+            })
+        })())
+    };
 
-    // Get the current process id
+    // Get the current process id to use as our socket identity
     let process_id = std::process::id();
 
     // Configure correspondent socket
     let mut builder = SocketBuilder::new()
         .with_identity(process_id, ProcessIdCanonicalizer)
         .with_service_name("Correspondent Chat Example".to_string())
-        .with_default_socket()
+        .with_recommended_socket()
         .expect("Failed to bind UDP socket")
-        .with_default_endpoint_cfg()
-        .with_new_certificate(
-            Duration::from_secs(60 * 60 * 24 /* = 1 day */),
-            |csr: &str| {
-                std::future::ready(
-                    (|| -> Result<_, Box<rcgen::RcgenError>> {
-                        let csr =
-                            rcgen::CertificateSigningRequest::from_pem(csr)?;
-                        let chain_pem =
-                            csr.serialize_pem_with_signer(&ca_cert)?;
-                        Ok(CertificateResponse {
-                            chain_pem,
-                            authority_pem: CA_CERT.to_string(),
-                        })
-                    })(),
-                )
-            },
-        )
+        .with_new_certificate(ONE_DAY, certificate_signing_callback)
         .await
         .expect("Failed to setup socket certificate");
 

@@ -317,10 +317,11 @@ async fn handle_stream(
             Ok(None) => break,
             Ok(Some(chunk)) => chunk,
             Err(_) => {
-                tokio::task::spawn_blocking(move || {
+                let _ = tokio::task::spawn_blocking(move || {
                     stream_handler
                         .finish(Some(&crate::StreamReadError { _inner: () }));
-                });
+                })
+                .await;
                 return;
             }
         };
@@ -343,5 +344,6 @@ async fn handle_stream(
             ContinueUnordered => ordered = true,
         }
     }
-    tokio::task::spawn_blocking(move || stream_handler.finish(None));
+    let _ =
+        tokio::task::spawn_blocking(move || stream_handler.finish(None)).await;
 }

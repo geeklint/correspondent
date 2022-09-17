@@ -141,7 +141,7 @@ checksum = "ea221b5284a47e40033bf9b66f35f984ec0ea2931eb03505246cd27a963f981b"
 
 [[package]]
 name = "correspondent"
-version = "0.3.0-dev0"
+version = "0.3.1-dev0"
 dependencies = [
  "dbus",
  "dbus-tokio",

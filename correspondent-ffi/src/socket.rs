@@ -207,7 +207,7 @@ impl Socket {
             return;
         }
         let msg_bytes = std::slice::from_raw_parts(msg, msg_len);
-        self.inner.endpoint().close(code.into(), msg_bytes);
+        self.inner.close(code.into(), msg_bytes);
     }
 }
 

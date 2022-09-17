@@ -36,7 +36,8 @@ pub struct Socket<T: IdentityCanonicalizer> {
     pub(crate) discovery_addr: Option<IpAddr>,
     endpoint: Endpoint,
     active_connections: ActiveConnections<T::Identity>,
-    post_event: tokio::sync::mpsc::UnboundedSender<InternalEvent<T::Identity>>,
+    post_event:
+        tokio::sync::mpsc::UnboundedSender<Option<InternalEvent<T::Identity>>>,
     nsd_manager: Arc<NsdManager>,
 }
 
@@ -76,7 +77,7 @@ impl<T: IdentityCanonicalizer> Socket<T> {
             streams: futures_util::stream::SelectAll::new(),
         };
         events.streams.push(Box::pin(futures_util::stream::poll_fn(
-            move |cx| recv_event.poll_recv(cx),
+            move |cx| recv_event.poll_recv(cx).map(Option::flatten),
         )));
         events.streams.push(
             incoming
@@ -120,6 +121,12 @@ impl<T: IdentityCanonicalizer> Socket<T> {
         ))
     }
 
+    /// Close the socket, shutting down all in-progress operations
+    pub fn close(&self, error_code: quinn::VarInt, reason: &[u8]) {
+        self.endpoint.close(error_code, reason);
+        let _ = self.post_event.send(None);
+    }
+
     /// Access the internal endpoint object.
     pub fn endpoint(&self) -> &quinn::Endpoint {
         &self.endpoint
@@ -157,7 +164,8 @@ impl<T: IdentityCanonicalizer> Socket<T> {
                 Arc::clone(&self.active_connections),
             )
             .await?;
-            let _ = self.post_event.send(InternalEvent::NewStream(stream));
+            let _ =
+                self.post_event.send(Some(InternalEvent::NewStream(stream)));
             Ok(peer_id)
         } else {
             Err(PeerNotConnected)

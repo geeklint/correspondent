@@ -115,6 +115,15 @@ pub struct ApplicationVTable {
         async_context: *mut SigningContext,
     ),
 
+    /// This function is called by the library when the socket has finished
+    /// initializing, before any other event are processed.
+    ///
+    /// # Safety
+    ///
+    /// This function pointer must not be null.
+    pub handle_initialized:
+        extern "C" fn(obj: *mut c_void, socket: *const crate::Socket),
+
     /// This function is called by the library when a message is received.
     ///
     /// # Safety
@@ -238,6 +247,13 @@ pub struct Application {
 }
 
 impl Application {
+    pub(crate) fn handle_initialized(&self, socket: Arc<crate::Socket>) {
+        (self.vtable.handle_initialized)(
+            self.vtable.obj,
+            Arc::into_raw(socket),
+        );
+    }
+
     pub(crate) fn handle_stream(
         &self,
         sender: &PeerIdInternal,
@@ -309,24 +325,6 @@ pub(crate) struct StringIdCanonicalizer {
 pub(crate) struct AppCertSigner(pub Arc<Application>);
 
 impl correspondent::IdentityCanonicalizer for StringIdCanonicalizer {
-    /*
-    fn application_data_dir(&self) -> PathBuf {
-        assert!(!self.vtable.application_data_dir.is_null());
-        let bytes = unsafe {
-            std::slice::from_raw_parts(
-                self.vtable.application_data_dir,
-                self.vtable.application_data_dir_len,
-            )
-        };
-        let string = String::from_utf8_lossy(bytes);
-        string.into_owned().into()
-    }
-
-    fn service_name(&self) -> String {
-        vtable_string!(self.vtable, service_name, service_name_len)
-    }
-    */
-
     type Identity = String;
 
     fn to_dns(&self, id: &String) -> String {

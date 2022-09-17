@@ -64,24 +64,18 @@ pub extern "C" fn version() -> *const c_char {
     VERSION.with(|cstr| cstr.as_ptr())
 }
 
-/// Create a start running a socket based on the given v-table.
+/// Create and start running a socket based on the given v-table.
 ///
-/// Returns null if creating the socket failed.
+/// Returns non-zero if an error occurred.
 ///
 /// # Safety
 ///
-/// `app` must point to a valid [`ApplicationVTable`]. The `app` pointer
-/// itself will not be used after this function returns (the caller must clean
-/// it up), however the pointers within the v-table must remain valid until the
-/// cleanup function in the v-table is called.
+/// `app` must point to a valid [`ApplicationVTable`].
 ///
-/// To avoid a memory leak, the returned pointer (if not null) must be cleaned
-/// up with [`socket_free`].
-#[export_name = "correspondent_start"]
-pub unsafe extern "C" fn start(
-    app: *const ApplicationVTable,
-) -> *const Socket {
-    socket::start(app)
+/// This function will block until an error occurs or [`socket_close`] is
+#[export_name = "correspondent_run"]
+pub unsafe extern "C" fn run(app: *const ApplicationVTable) -> i32 {
+    socket::run(app)
 }
 
 /// Send a message to all connected peers with the specified identity
@@ -195,7 +189,7 @@ pub unsafe extern "C" fn socket_close(
     }
 }
 
-/// Cleanup a socket
+/// Free the memory associated with a socket
 ///
 /// # Safety
 ///

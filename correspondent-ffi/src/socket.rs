@@ -5,7 +5,6 @@ use std::{collections::HashMap, sync::Arc, sync::RwLock, time::Duration};
 
 use futures_util::stream::FuturesUnordered;
 use quinn::Connection;
-use tokio::sync::oneshot::{channel, Sender};
 
 use correspondent::PeerId;
 
@@ -211,29 +210,20 @@ impl Socket {
     }
 }
 
-pub unsafe fn start(app: *const ApplicationVTable) -> *const Socket {
+pub unsafe fn run(app: *const ApplicationVTable) -> i32 {
     if app.is_null() {
-        return std::ptr::null_mut();
+        return -1;
     }
     let app = (&*app).clone();
     if !app.check() {
-        return std::ptr::null_mut();
+        return -1;
     }
     let app = Application::from(app);
-    let (send, recv) = channel();
-    std::thread::spawn(move || {
-        network_thread(app, send);
-    });
-    recv.blocking_recv()
-        .map(Arc::into_raw)
-        .unwrap_or(std::ptr::null())
+    network_thread(app).err().unwrap_or(0)
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn network_thread(
-    app: Application,
-    sender: Sender<Arc<Socket>>,
-) -> Option<()> {
+async fn network_thread(app: Application) -> Result<(), i32> {
     use futures_util::StreamExt;
 
     let app = Arc::new(app);
@@ -247,25 +237,25 @@ async fn network_thread(
         )
         .with_service_name("Correspondent Chat Example".to_string())
         .with_recommended_socket()
-        .ok()?
+        .map_err(|_| 1)?
         .with_new_certificate(
             Duration::from_secs(60 * 60 * 24 /* = 1 day */),
             AppCertSigner(Arc::clone(&app)),
         )
         .await
-        .ok()?;
+        .map_err(|_| -1)?;
 
     Arc::get_mut(&mut builder.client_cfg.transport)
         .expect("there should not be any other references at this point")
         .keep_alive_interval(Some(Duration::from_secs(5)));
 
-    let (socket, mut events) = builder.start().ok()?;
+    let (socket, mut events) = builder.start().map_err(|_| 1)?;
     let socket = Arc::new(Socket {
         inner: socket,
         runtime: tokio::runtime::Handle::current(),
         current_peers: RwLock::default(),
     });
-    let _ = sender.send(Arc::clone(&socket));
+    app.handle_initialized(Arc::clone(&socket));
     while let Some(event) = events.next().await {
         use correspondent::Event;
         match event {
@@ -299,7 +289,7 @@ async fn network_thread(
             _ => {}
         }
     }
-    Some(())
+    Ok(())
 }
 
 async fn handle_stream(

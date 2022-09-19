@@ -30,15 +30,17 @@ impl Socket {
         msg: *const u8,
         msg_len: usize,
     ) {
-        if id.is_null() || msg.is_null() {
-            return;
-        }
-        let id_bytes = std::slice::from_raw_parts(id, id_len);
+        let (id_bytes, msg_bytes) = match (
+            slice_from_raw_parts_maybe_null(id, id_len),
+            slice_from_raw_parts_maybe_null(msg, msg_len),
+        ) {
+            (Some(i), Some(m)) => (i, m.to_vec()),
+            _ => return,
+        };
         let id_str = match std::str::from_utf8(id_bytes) {
             Ok(s) => s,
             Err(_) => return,
         };
-        let msg_bytes = std::slice::from_raw_parts(msg, msg_len).to_vec();
         let connections: Vec<_> = {
             self.current_peers
                 .read()
@@ -74,10 +76,13 @@ impl Socket {
         msg: *const u8,
         msg_len: usize,
     ) {
-        if id.is_null() || msg.is_null() {
-            return;
-        }
-        let id_bytes = std::slice::from_raw_parts(id, id_len);
+        let (id_bytes, msg_bytes) = match (
+            slice_from_raw_parts_maybe_null(id, id_len),
+            slice_from_raw_parts_maybe_null(msg, msg_len),
+        ) {
+            (Some(i), Some(m)) => (i, m.to_vec()),
+            _ => return,
+        };
         let peer_id = if let Ok(id_str) = std::str::from_utf8(id_bytes) {
             correspondent::PeerId {
                 identity: id_str.to_string(),
@@ -86,7 +91,6 @@ impl Socket {
         } else {
             return;
         };
-        let msg_bytes = std::slice::from_raw_parts(msg, msg_len).to_vec();
         let connection = {
             match self
                 .current_peers
@@ -108,10 +112,10 @@ impl Socket {
     }
 
     pub(crate) unsafe fn send_to_all(&self, msg: *const u8, msg_len: usize) {
-        if msg.is_null() {
-            return;
-        }
-        let msg_bytes = std::slice::from_raw_parts(msg, msg_len).to_vec();
+        let msg_bytes = match slice_from_raw_parts_maybe_null(msg, msg_len) {
+            Some(m) => m.to_vec(),
+            None => return,
+        };
         let connections: Vec<_> = {
             self.current_peers
                 .read()
@@ -143,11 +147,14 @@ impl Socket {
         unique: usize,
         writer: *mut StreamWriterVTable,
     ) {
-        if id.is_null() || writer.is_null() {
+        if writer.is_null() {
             return;
         }
         let writer = crate::stream::StreamWriter::new(writer);
-        let id_bytes = std::slice::from_raw_parts(id, id_len);
+        let id_bytes = match slice_from_raw_parts_maybe_null(id, id_len) {
+            Some(i) => i,
+            None => return,
+        };
         let peer_id = if let Ok(id_str) = std::str::from_utf8(id_bytes) {
             correspondent::PeerId {
                 identity: id_str.to_string(),
@@ -202,10 +209,10 @@ impl Socket {
         msg: *const u8,
         msg_len: usize,
     ) {
-        if msg.is_null() {
-            return;
-        }
-        let msg_bytes = std::slice::from_raw_parts(msg, msg_len);
+        let msg_bytes = match slice_from_raw_parts_maybe_null(msg, msg_len) {
+            Some(m) => m,
+            None => return,
+        };
         self.inner.close(code.into(), msg_bytes);
     }
 }
@@ -336,4 +343,15 @@ async fn handle_stream(
     }
     let _ =
         tokio::task::spawn_blocking(move || stream_handler.finish(None)).await;
+}
+
+pub(crate) unsafe fn slice_from_raw_parts_maybe_null<'a, T>(
+    ptr: *const T,
+    len: usize,
+) -> Option<&'a [T]> {
+    if ptr.is_null() {
+        (len == 0).then(|| &[][..])
+    } else {
+        Some(std::slice::from_raw_parts(ptr, len))
+    }
 }

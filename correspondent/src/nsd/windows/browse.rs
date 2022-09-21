@@ -84,6 +84,7 @@ impl Drop for RecordList {
             unsafe {
                 Dns::DnsFree(self.ptr as *mut _, Dns::DnsFreeRecordList);
             }
+            self.ptr = std::ptr::null_mut();
         }
     }
 }

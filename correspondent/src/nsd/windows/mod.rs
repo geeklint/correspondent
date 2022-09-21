@@ -75,13 +75,13 @@ unsafe fn utf16_null_to_string(ptr: *const u16) -> String {
 
 #[derive(Default)]
 struct CancelToken<T: CancelType> {
-    token: Dns::DNS_SERVICE_CANCEL,
+    token: Box<Dns::DNS_SERVICE_CANCEL>,
     _type: T,
 }
 
 impl<T: CancelType> CancelToken<T> {
     fn as_ptr(&mut self) -> *mut Dns::DNS_SERVICE_CANCEL {
-        (&mut self.token) as *mut _
+        &mut *self.token
     }
 }
 
@@ -92,8 +92,9 @@ impl<T: CancelType> Drop for CancelToken<T> {
     fn drop(&mut self) {
         if !self.token.reserved.is_null() {
             unsafe {
-                (T::CANCEL_FN)(&mut self.token);
+                (T::CANCEL_FN)(&mut *self.token);
             }
+            self.token.reserved = std::ptr::null_mut();
         }
     }
 }
@@ -118,6 +119,7 @@ impl Drop for ServiceInstance {
             unsafe {
                 Dns::DnsServiceFreeInstance(self.ptr);
             }
+            self.ptr = std::ptr::null_mut();
         }
     }
 }

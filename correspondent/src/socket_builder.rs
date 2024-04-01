@@ -34,13 +34,13 @@ impl SocketCertificate {
         authority_pem: String,
     ) -> std::io::Result<Self> {
         let priv_key = rustls::PrivateKey(priv_key_der);
-        let chain = rustls_pemfile::certs(&mut chain_pem.as_bytes())?
-            .into_iter()
-            .map(rustls::Certificate)
-            .collect();
+        let chain = rustls_pemfile::certs(&mut chain_pem.as_bytes())
+            .map(|r| r.map(|cert| rustls::Certificate(cert.to_vec())))
+            .collect::<Result<_, _>>()?;
         let mut authority = rustls::RootCertStore::empty();
-        for cert in rustls_pemfile::certs(&mut authority_pem.as_bytes())? {
-            let _ = authority.add(&rustls::Certificate(cert));
+        for cert in rustls_pemfile::certs(&mut authority_pem.as_bytes()) {
+            let cert = cert?;
+            let _ = authority.add(&rustls::Certificate(cert.to_vec()));
         }
         Ok(Self {
             priv_key,

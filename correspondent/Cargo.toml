@@ -18,12 +18,12 @@ quinn = { version = "0.8.4", default-features = false, features = ["tls-rustls"]
 rand = "0.8"
 rcgen = { version = "0.9.3", features = ["pem", "x509-parser"] }
 rustls = "0.20.6"
-rustls-pemfile = "1.0.1"
+rustls-pemfile = "2.1.1"
 socket2 = "0.4.6"
 time = "0.3.14"
 tokio = { version = "1.0", features = ["full"] }
 webpki = "0.22"
-x509-parser = "0.14.0"
+x509-parser = "0.16.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus = "0.9"

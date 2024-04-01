@@ -58,10 +58,10 @@ impl SocketCertificate {
     pub fn serialize_chain_pem(&self) -> String {
         let mut chain_pem = String::new();
         for cert in self.chain.iter().cloned() {
-            chain_pem += &pem::encode(&pem::Pem {
-                tag: "CERTIFICATE".to_string(),
-                contents: cert.0,
-            });
+            chain_pem += &pem::encode(&pem::Pem::new(
+                "CERTIFICATE".to_string(),
+                cert.0,
+            ));
         }
         chain_pem
     }

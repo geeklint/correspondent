@@ -13,7 +13,7 @@ license = "Apache-2.0 OR MIT OR Zlib"
 
 [dependencies]
 futures-util = { version = "0.3", features = ["channel"] }
-pem = "1.1.0"
+pem = "3.0.3"
 quinn = { version = "0.8.4", default-features = false, features = ["tls-rustls"] }
 rand = "0.8"
 rcgen = { version = "0.9.3", features = ["pem", "x509-parser"] }

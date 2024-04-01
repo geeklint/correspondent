@@ -1,6 +1,6 @@
 [package]
 name = "correspondent"
-version = "0.3.1"
+version = "0.4.0-dev0"
 edition = "2018"
 description = "non-hierarchical networking library"
 homepage = "https://github.com/geeklint/correspondent"

@@ -141,7 +141,7 @@ checksum = "ea221b5284a47e40033bf9b66f35f984ec0ea2931eb03505246cd27a963f981b"
 
 [[package]]
 name = "correspondent"
-version = "0.3.1-dev0"
+version = "0.4.0-dev0"
 dependencies = [
  "dbus",
  "dbus-tokio",
@@ -163,7 +163,7 @@ dependencies = [
 
 [[package]]
 name = "correspondent-ffi"
-version = "0.3.0-dev0"
+version = "0.4.0-dev0"
 dependencies = [
  "correspondent",
  "futures-util",
@@ -431,9 +431,9 @@ dependencies = [
 
 [[package]]
 name = "num-bigint"
-version = "0.4.0"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e0d047c1062aa51e256408c560894e5251f08925980e53cf1aa5bd00eec6512"
+checksum = "f93ab6289c7b344a8a9f60f88d80aa20032336fe78da341afc91c8a2341fc75f"
 dependencies = [
  "autocfg",
  "num-integer",

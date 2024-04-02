@@ -61,10 +61,11 @@ impl<T: IdentityCanonicalizer> Socket<T> {
         builder: SocketBuilderComplete<T>,
     ) -> io::Result<(Self, Events<T::Identity>)> {
         let instance_id = rand::Rng::gen(&mut rand::thread_rng());
-        let (mut endpoint, incoming) = Endpoint::new(
+        let mut endpoint = Endpoint::new(
             builder.endpoint_cfg,
             Some(builder.server_cfg),
             builder.socket,
+            Arc::new(quinn::TokioRuntime),
         )?;
         endpoint.set_default_client_config(builder.client_cfg);
         let identity = Arc::new(builder.identity);
@@ -79,6 +80,13 @@ impl<T: IdentityCanonicalizer> Socket<T> {
         events.streams.push(Box::pin(futures_util::stream::poll_fn(
             move |cx| recv_event.poll_recv(cx).map(Option::flatten),
         )));
+        let incoming = futures_util::stream::unfold(
+            endpoint.clone(),
+            |endpoint| async move {
+                let connecting = endpoint.accept().await?;
+                Some((connecting, endpoint))
+            },
+        );
         events.streams.push(
             incoming
                 .filter_map(move |connecting| {

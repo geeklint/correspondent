@@ -93,9 +93,9 @@ async fn main() {
     // For applications that are not constantly sending data (like this
     // chat app, which may idle when messages are not being typed) setting a
     // keep-alive value will prevent connections from closing due to timeout
-    Arc::get_mut(&mut builder.client_cfg.transport)
-        .expect("there should not be any other references at this point")
-        .keep_alive_interval(Some(Duration::from_secs(5)));
+    let mut transport = quinn::TransportConfig::default();
+    transport.keep_alive_interval(Some(Duration::from_secs(5)));
+    builder.client_cfg.transport_config(Arc::new(transport));
 
     let connection_set: Arc<Mutex<HashMap<PeerId<u32>, Connection>>> =
         Arc::default();
@@ -170,7 +170,7 @@ async fn handle_events(
                 println!("\r{} left.", peer_id.identity);
                 show_prompt(process_id);
             }
-            Event::UniStream(peer_id, stream) => {
+            Event::UniStream(peer_id, mut stream) => {
                 tokio::spawn(async move {
                     if let Ok(message) = stream.read_to_end(1024).await {
                         let text = String::from_utf8_lossy(&message);

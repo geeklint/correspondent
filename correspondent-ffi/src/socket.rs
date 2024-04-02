@@ -252,9 +252,9 @@ async fn network_thread(app: Application) -> Result<(), i32> {
         .await
         .map_err(|_| -1)?;
 
-    Arc::get_mut(&mut builder.client_cfg.transport)
-        .expect("there should not be any other references at this point")
-        .keep_alive_interval(Some(Duration::from_secs(5)));
+    let mut transport = quinn::TransportConfig::default();
+    transport.keep_alive_interval(Some(Duration::from_secs(5)));
+    builder.client_cfg.transport_config(Arc::new(transport));
 
     let (socket, mut events) = builder.start().map_err(|_| 1)?;
     let socket = Arc::new(Socket {

@@ -5,7 +5,7 @@ use std::{convert::TryFrom, future::Future, sync::Arc, time::Duration};
 
 use {
     futures_util::StreamExt,
-    quinn::{Connecting, Connection, NewConnection},
+    quinn::{Connecting, Connection},
     tokio::time::timeout,
 };
 
@@ -40,12 +40,7 @@ pub(crate) async fn start_peer<T: IdentityCanonicalizer>(
     (PeerId<T::Identity>, InternalEventStream<T::Identity>),
     PeerNotConnected,
 > {
-    let NewConnection {
-        connection,
-        mut uni_streams,
-        bi_streams,
-        ..
-    } = connecting.await.map_err(|_e| PeerNotConnected)?;
+    let connection = connecting.await.map_err(|_e| PeerNotConnected)?;
     async fn hello_timeout<T>(
         fut: impl Future<Output = Result<T, PeerNotConnected>>,
     ) -> Result<T, PeerNotConnected> {
@@ -68,10 +63,10 @@ pub(crate) async fn start_peer<T: IdentityCanonicalizer>(
         Ok(())
     });
     let recving_hello = hello_timeout(async {
-        let mut first_stream = match uni_streams.next().await {
-            Some(Ok(stream)) => stream,
-            _ => return Err(PeerNotConnected),
-        };
+        let mut first_stream = connection
+            .accept_uni()
+            .await
+            .map_err(|_| PeerNotConnected)?;
         let mut instance_id_bytes = [0; 8];
         first_stream
             .read_exact(&mut instance_id_bytes)
@@ -118,52 +113,46 @@ pub(crate) async fn start_peer<T: IdentityCanonicalizer>(
         unique: connection.stable_id(),
     };
 
+    let new_peer = InternalEvent::Event(Event::NewPeer(
+        peer_id.clone(),
+        connection.clone(),
+    ));
+    let peer_gone = InternalEvent::Event(Event::PeerGone(peer_id.clone()));
+    let streams_stream = futures_util::stream::unfold(connection.clone(), {
+        let peer_id = peer_id.clone();
+        move |connection| {
+            let peer_id = peer_id.clone();
+            async move {
+                let event = tokio::select! {
+                    Ok(stream) = connection.accept_uni() => {
+                        Event::UniStream(peer_id, stream)
+                    },
+                    Ok((send, recv)) = connection.accept_bi() => {
+                        Event::BiStream(peer_id, send, recv)
+                    },
+                    else => return None,
+                };
+                Some((InternalEvent::Event(event), connection))
+            }
+        }
+    });
+
     use crate::util::StreamInsertExt;
 
     Ok((
-        peer_id.clone(),
-        futures_util::stream::once({
-            let peer_id = peer_id.clone();
-            let connection = connection.clone();
-            futures_util::future::lazy(|_cx| {
-                InternalEvent::Event(Event::NewPeer(peer_id, connection))
+        peer_id,
+        futures_util::stream::once(async move { new_peer })
+            .chain(streams_stream)
+            .chain(futures_util::stream::once(async move { peer_gone }))
+            .insert_boxed({
+                let _connection = connection;
+                async move {
+                    let mut active_conn_guard =
+                        active_connections.lock().await;
+                    active_conn_guard.remove(&peer_instance_id);
+                }
             })
-        })
-        .chain({
-            let peer_id_uni = peer_id.clone();
-            let peer_id_bi = peer_id.clone();
-            futures_util::stream::select(
-                uni_streams.scan((), move |(), maybe_stream| {
-                    let item = match maybe_stream {
-                        Ok(stream) => Some(InternalEvent::Event(
-                            Event::UniStream(peer_id_uni.clone(), stream),
-                        )),
-                        Err(_) => None,
-                    };
-                    async { item }
-                }),
-                bi_streams.scan((), move |(), maybe_stream| {
-                    let item = match maybe_stream {
-                        Ok((send, recv)) => Some(InternalEvent::Event(
-                            Event::BiStream(peer_id_bi.clone(), send, recv),
-                        )),
-                        Err(_) => None,
-                    };
-                    async { item }
-                }),
-            )
-        })
-        .chain(futures_util::stream::once(async move {
-            InternalEvent::Event(Event::PeerGone(peer_id.clone()))
-        }))
-        .insert_boxed({
-            let _connection = connection;
-            async move {
-                let mut active_conn_guard = active_connections.lock().await;
-                active_conn_guard.remove(&peer_instance_id);
-            }
-        })
-        .boxed(),
+            .boxed(),
     ))
 }
 
@@ -181,7 +170,7 @@ fn verify_peer(
         .downcast::<Vec<rustls::Certificate>>()
         .ok()?;
     let cert = chain.iter().next()?;
-    let pki_cert = webpki::EndEntityCert::try_from(cert.0.as_ref()).ok()?;
+    let pki_cert = webpki::EndEntityCert::try_from(&cert.0[..]).ok()?;
     let pki_name = webpki::DnsNameRef::try_from_ascii_str(hostname)
         .expect("Application::identity_to_dns returned invalid DNS name");
     pki_cert.verify_is_valid_for_dns_name(pki_name).ok()?;

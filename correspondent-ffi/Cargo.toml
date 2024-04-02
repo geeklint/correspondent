@@ -12,6 +12,6 @@ crate-type = ["cdylib"]
 [dependencies]
 correspondent = { path = "../correspondent" }
 futures-util = "0.3"
-quinn = "0.8.4"
+quinn = "0.10.2"
 rcgen = { version = "0.9.3", features = ["pem", "x509-parser"] }
 tokio = { version = "1.20.1", features = ["full"] }

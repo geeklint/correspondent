@@ -50,17 +50,17 @@ impl SocketCertificate {
     }
 
     /// Get the DER-formatted version of the private key
-    pub fn serialize_private_key_der(&self) -> &Vec<u8> {
+    pub fn serialize_private_key_der(&self) -> &[u8] {
         &self.priv_key.0
     }
 
     /// Get the PEM-formatted version of the certificate chain
     pub fn serialize_chain_pem(&self) -> String {
         let mut chain_pem = String::new();
-        for cert in self.chain.iter().cloned() {
+        for cert in &self.chain {
             chain_pem += &pem::encode(&pem::Pem::new(
                 "CERTIFICATE".to_string(),
-                cert.0,
+                cert.0.clone(),
             ));
         }
         chain_pem
@@ -296,14 +296,17 @@ impl<Id, SN, US, EC>
         let client_crypto = rustls::ClientConfig::builder()
             .with_safe_defaults()
             .with_root_certificates(cert.authority.clone())
-            .with_single_cert(cert.chain.clone(), cert.priv_key.clone())?;
+            .with_client_auth_cert(
+                cert.chain.clone(),
+                cert.priv_key.clone(),
+            )?;
         let server_crypto = rustls::ServerConfig::builder()
             .with_safe_defaults()
-            .with_client_cert_verifier(
+            .with_client_cert_verifier(Arc::new(
                 rustls::server::AllowAnyAuthenticatedClient::new(
                     cert.authority,
                 ),
-            )
+            ))
             .with_single_cert(cert.chain, cert.priv_key)?;
         let client_cfg = ClientConfig::new(Arc::new(client_crypto));
         let server_cfg = ServerConfig::with_crypto(Arc::new(server_crypto));

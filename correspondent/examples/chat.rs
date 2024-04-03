@@ -11,7 +11,11 @@
 //! The example uses process ids as identity values.
 
 use std::{
-    collections::HashMap, io::Write, sync::Arc, sync::Mutex, time::Duration,
+    collections::HashMap,
+    convert::TryFrom,
+    io::Write,
+    sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use futures_util::stream::StreamExt;
@@ -62,14 +66,13 @@ fn show_prompt(process_id: u32) {
 #[tokio::main]
 async fn main() {
     // Create the certificate signing callback from the debug-cert files
-    let ca_key = rcgen::KeyPair::from_der(CA_KEY_PK8).unwrap();
-    let params =
-        rcgen::CertificateParams::from_ca_cert_pem(CA_CERT, ca_key).unwrap();
-    let ca_cert = rcgen::Certificate::from_params(params).unwrap();
+    let ca_key = rcgen::KeyPair::try_from(CA_KEY_PK8).unwrap();
+    let params = rcgen::CertificateParams::from_ca_cert_pem(CA_CERT).unwrap();
+    let ca_cert = params.self_signed(&ca_key).unwrap();
     let certificate_signing_callback = |csr: &str| {
-        std::future::ready((|| -> Result<_, Box<rcgen::RcgenError>> {
-            let csr = rcgen::CertificateSigningRequest::from_pem(csr)?;
-            let chain_pem = csr.serialize_pem_with_signer(&ca_cert)?;
+        std::future::ready((|| -> Result<_, Box<rcgen::Error>> {
+            let csr = rcgen::CertificateSigningRequestParams::from_pem(csr)?;
+            let chain_pem = csr.signed_by(&ca_cert, &ca_key)?.pem();
             Ok(CertificateResponse {
                 chain_pem,
                 authority_pem: CA_CERT.to_string(),

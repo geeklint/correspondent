@@ -2,6 +2,7 @@
 /* Copyright © 2021 Violet Leonard */
 
 use std::{
+    convert::TryFrom,
     ffi::{CStr, CString},
     os::raw::c_char,
 };
@@ -28,13 +29,13 @@ pub unsafe fn do_sign(
         .map_err(|_| RcgenError::CouldNotParseCertificate)?;
     let authority_key_pk8 =
         std::slice::from_raw_parts(authority_key_pk8, authority_key_pk8_len);
-    let ca_key = rcgen::KeyPair::from_der(authority_key_pk8)?;
-    let params =
-        rcgen::CertificateParams::from_ca_cert_pem(authority_pem, ca_key)?;
-    let ca_cert = rcgen::Certificate::from_params(params)?;
-    let csr = rcgen::CertificateSigningRequest::from_pem(csr_pem)?;
-    csr.serialize_pem_with_signer(&ca_cert)
-        .and_then(|string| {
+    let ca_key = rcgen::KeyPair::try_from(authority_key_pk8)?;
+    let params = rcgen::CertificateParams::from_ca_cert_pem(authority_pem)?;
+    let ca_cert = params.self_signed(&ca_key)?;
+    let csr = rcgen::CertificateSigningRequestParams::from_pem(csr_pem)?;
+    csr.signed_by(&ca_cert, &ca_key)
+        .and_then(|cert| {
+            let string = cert.pem();
             CString::new(string)
                 .map_err(|_| RcgenError::CouldNotParseCertificate)
         })
@@ -64,8 +65,8 @@ pub unsafe fn create_ca_cert(
     }
     let dns_name = CStr::from_ptr(dns_name).to_string_lossy().into_owned();
     let ca_cert = rcgen::generate_simple_self_signed(&[dns_name][..])?;
-    let cert_pem = ca_cert.serialize_pem()?;
-    let key_pk8 = ca_cert.serialize_private_key_der().into_boxed_slice();
+    let cert_pem = ca_cert.cert.pem();
+    let key_pk8 = ca_cert.key_pair.serialize_der().into_boxed_slice();
     let authority_pem = CString::new(cert_pem)
         .map_err(|_| RcgenError::CouldNotParseCertificate)?
         .into_raw();

@@ -342,20 +342,24 @@ where
         use CertificateGenerationError as Err;
         let hostname =
             self.identity.canonicalizer.to_dns(&self.identity.identity);
-        let mut params = rcgen::CertificateParams::new([hostname]);
+        let mut params = rcgen::CertificateParams::new([hostname])
+            .map_err(Err::Generation)?;
         let now = time::OffsetDateTime::now_utc();
         params.not_before = now;
         params.not_after = now + valid_for;
-        let new_cert = rcgen::Certificate::from_params(params)
+        let key = rcgen::KeyPair::generate().map_err(Err::Generation)?;
+        let csr = params
+            .serialize_request(&key)
+            .map_err(Err::Generation)?
+            .pem()
             .map_err(Err::Generation)?;
-        let csr = new_cert.serialize_request_pem().map_err(Err::Generation)?;
         let resp =
             signer.sign_certificate(&csr).await.map_err(Err::Signing)?;
         let CertificateResponse {
             chain_pem,
             authority_pem,
         } = resp;
-        let priv_key_der = new_cert.serialize_private_key_der();
+        let priv_key_der = key.serialize_der();
         signer.save_private_key(&priv_key_der);
         self.with_certificate(
             SocketCertificate::from_data(
@@ -371,7 +375,7 @@ where
 
 #[derive(Debug)]
 pub enum CertificateGenerationError<T> {
-    Generation(rcgen::RcgenError),
+    Generation(rcgen::Error),
     Signing(T),
     Parsing(io::Error),
     Config(rustls::Error),

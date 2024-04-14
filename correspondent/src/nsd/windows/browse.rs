@@ -2,15 +2,15 @@
 /* Copyright © 2021 Violet Leonard */
 
 use std::{
+    convert::TryFrom,
     ffi::c_void,
     future::Future,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    os::windows::ffi::OsStrExt,
     sync::Arc,
 };
 
-use super::bindings::Windows::Win32::{
-    Foundation::PWSTR, NetworkManagement::Dns,
-};
+use windows::{core::PCWSTR, Win32::NetworkManagement::Dns};
 
 pub(super) fn browse_services<T, Found, FoundFut>(
     identity: Arc<crate::socket::Identity<T>>,
@@ -33,25 +33,27 @@ where
     let callback = unsafe {
         let mut cb_union: Dns::DNS_SERVICE_BROWSE_REQUEST_0 =
             std::mem::zeroed();
-        cb_union.pBrowseCallback = service_browse_callback as *mut c_void;
+        cb_union.pBrowseCallback = Some(service_browse_callback);
         cb_union
     };
-    let query_name = windows::IntoParam::<'_, PWSTR>::into_param(format!(
+    let query_name = std::ffi::OsString::from(format!(
         "{}.local",
         super::super::SERVICE_TYPE
-    ))
-    .abi();
-    let mut request = Dns::DNS_SERVICE_BROWSE_REQUEST {
-        Version: Dns::DNS_QUERY_REQUEST_VERSION1,
+    ));
+    let query_name = query_name
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<u16>>();
+    let request = Dns::DNS_SERVICE_BROWSE_REQUEST {
+        Version: Dns::DNS_QUERY_REQUEST_VERSION1.0,
         InterfaceIndex: 0,
-        QueryName: query_name,
+        QueryName: PCWSTR(query_name.as_ptr()),
         Anonymous: callback,
-        pQueryContext: Box::into_raw(browse_context) as *mut c_void,
+        pQueryContext: Box::into_raw(browse_context).cast(),
     };
     let mut cancel_token = super::CancelToken::<CancelBrowse>::default();
-    let retcode = unsafe {
-        Dns::DnsServiceBrowse(&mut request as *mut _, cancel_token.as_ptr())
-    };
+    let retcode =
+        unsafe { Dns::DnsServiceBrowse(&request, cancel_token.as_ptr()) };
     if retcode != 9506 {
         return None;
     }
@@ -62,7 +64,7 @@ where
 pub(super) struct CancelBrowse;
 
 impl super::CancelType for CancelBrowse {
-    const CANCEL_FN: unsafe fn(*mut Dns::DNS_SERVICE_CANCEL) -> i32 =
+    const CANCEL_FN: unsafe fn(*const Dns::DNS_SERVICE_CANCEL) -> i32 =
         Dns::DnsServiceBrowseCancel;
 }
 
@@ -70,19 +72,19 @@ impl super::CancelType for CancelBrowse {
 struct CancelResolve;
 
 impl super::CancelType for CancelResolve {
-    const CANCEL_FN: unsafe fn(*mut Dns::DNS_SERVICE_CANCEL) -> i32 =
+    const CANCEL_FN: unsafe fn(*const Dns::DNS_SERVICE_CANCEL) -> i32 =
         Dns::DnsServiceResolveCancel;
 }
 
 struct RecordList {
-    ptr: *mut Dns::DNS_RECORDW,
+    ptr: *const Dns::DNS_RECORDW,
 }
 
 impl Drop for RecordList {
     fn drop(&mut self) {
         if !self.ptr.is_null() {
             unsafe {
-                Dns::DnsFree(self.ptr as *mut _, Dns::DnsFreeRecordList);
+                Dns::DnsFree(Some(self.ptr.cast()), Dns::DnsFreeRecordList);
             }
             self.ptr = std::ptr::null_mut();
         }
@@ -91,8 +93,8 @@ impl Drop for RecordList {
 
 unsafe extern "system" fn service_browse_callback(
     status: u32,
-    ctx: *mut c_void,
-    records: *mut Dns::DNS_RECORDW,
+    ctx: *const c_void,
+    records: *const Dns::DNS_RECORDW,
 ) {
     let _guard = RecordList { ptr: records };
     if status != 0 {
@@ -100,22 +102,20 @@ unsafe extern "system" fn service_browse_callback(
     }
     let mut current = records;
     while !current.is_null() {
-        if u32::from((*current).wType) != Dns::DNS_TYPE_SRV {
+        if (*current).wType != Dns::DNS_TYPE_SRV.0 {
             current = (*current).pNext;
             continue;
         }
-        let mut resolve_request = Dns::DNS_SERVICE_RESOLVE_REQUEST {
-            Version: Dns::DNS_QUERY_REQUEST_VERSION1,
+        let resolve_request = Dns::DNS_SERVICE_RESOLVE_REQUEST {
+            Version: Dns::DNS_QUERY_REQUEST_VERSION1.0,
             InterfaceIndex: 0,
             QueryName: (*current).pName,
             pResolveCompletionCallback: Some(service_resolve_callback),
-            pQueryContext: ctx,
+            pQueryContext: ctx.cast_mut(),
         };
         let mut cancel_token = super::CancelToken::<CancelResolve>::default();
-        let retcode = Dns::DnsServiceResolve(
-            &mut resolve_request,
-            cancel_token.as_ptr(),
-        );
+        let retcode =
+            Dns::DnsServiceResolve(&resolve_request, cancel_token.as_ptr());
         #[allow(clippy::mem_forget)]
         std::mem::forget(cancel_token);
         if retcode != 9506 {
@@ -127,14 +127,14 @@ unsafe extern "system" fn service_browse_callback(
 
 unsafe extern "system" fn service_resolve_callback(
     status: u32,
-    ctx: *mut c_void,
-    instance: *mut Dns::DNS_SERVICE_INSTANCE,
+    ctx: *const c_void,
+    instance: *const Dns::DNS_SERVICE_INSTANCE,
 ) {
     let instance = super::ServiceInstance { ptr: instance };
     if status != 0 {
         return;
     }
-    let ctx = &*(ctx as *const Arc<dyn BrowsingContext>);
+    let ctx = &*ctx.cast::<Arc<dyn BrowsingContext>>();
     let ctx = Arc::clone(ctx);
     if let Some(instance_ref) = instance.get() {
         ctx.do_spawn(instance_ref);
@@ -172,11 +172,12 @@ where
         }
         let host = super::utf16_null_to_string(instance.pszHostName.0);
         let port = instance.wPort;
-        let props_len = instance.dwPropertyCount as usize;
+        let props_len = usize::try_from(instance.dwPropertyCount)
+            .expect("u32 should be convertable to usize");
         let keys = std::slice::from_raw_parts(instance.keys, props_len);
         let values = std::slice::from_raw_parts(instance.values, props_len);
-        let id_key = [b'i'.into(), b'd'.into(), 0];
-        let ins_key = [b'i'.into(), b'n'.into(), b's'.into(), 0];
+        let id_key = b"id\0".map(u16::from);
+        let ins_key = b"ins\0".map(u16::from);
         let mut identity = None;
         let mut instance = None;
         for (key, value) in keys.iter().copied().zip(values.iter().copied()) {

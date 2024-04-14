@@ -5,12 +5,13 @@ use std::{
     convert::TryInto,
     ffi::c_void,
     net::IpAddr,
+    os::windows::ffi::OsStrExt,
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use super::bindings::Windows::Win32::{
-    Foundation::{HANDLE, PWSTR},
-    NetworkManagement::Dns,
+use windows::{
+    core::PCWSTR,
+    Win32::{Foundation::HANDLE, NetworkManagement::Dns},
 };
 
 pub(super) fn create_service(
@@ -33,17 +34,16 @@ pub(super) fn create_service(
         construct_instance(&service_name, &hostname, port, &txt_pairs)?;
     let complete_flag = Box::leak(Box::new(AtomicBool::new(false)));
     let request = Box::new(Dns::DNS_SERVICE_REGISTER_REQUEST {
-        Version: Dns::DNS_QUERY_REQUEST_VERSION1,
+        Version: Dns::DNS_QUERY_REQUEST_VERSION1.0,
         InterfaceIndex: 0,
-        pServiceInstance: service_instance.ptr,
+        pServiceInstance: service_instance.ptr.cast_mut(),
         pRegisterCompletionCallback: Some(service_register_complete),
         pQueryContext: complete_flag as *const AtomicBool as *mut c_void,
         hCredentials: HANDLE::default(),
         unicastEnabled: false.into(),
     });
     let request = Box::into_raw(request);
-    let retcode =
-        unsafe { Dns::DnsServiceRegister(request, std::ptr::null_mut()) };
+    let retcode = unsafe { Dns::DnsServiceRegister(request, None) };
     if retcode == 9506 {
         Some(RegisterRequest {
             complete_flag,
@@ -51,7 +51,7 @@ pub(super) fn create_service(
             request,
         })
     } else {
-        unsafe { Box::from_raw(request) };
+        let _ = unsafe { Box::from_raw(request) };
         None
     }
 }
@@ -67,18 +67,26 @@ fn construct_instance(
     );
     let mut owned_keys = to_windows_str_boxen(txt_pairs.iter().map(|p| p.0));
     let mut owned_values = to_windows_str_boxen(txt_pairs.iter().map(|p| p.1));
-    let mut keys = to_windows_str_array_ptr(&mut owned_keys);
-    let mut values = to_windows_str_array_ptr(&mut owned_values);
+    let keys = to_windows_str_array_ptr(&mut owned_keys);
+    let values = to_windows_str_array_ptr(&mut owned_values);
+    let service_name = std::ffi::OsStr::new(service_name)
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<u16>>();
+    let hostname = std::ffi::OsStr::new(hostname)
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<u16>>();
     let ptr = unsafe {
         Dns::DnsServiceConstructInstance(
             // service name
-            service_name,
+            PCWSTR(service_name.as_ptr()),
             // host name
-            hostname,
+            PCWSTR(hostname.as_ptr()),
             // ipv4
-            std::ptr::null_mut(),
+            None,
             // ipv6
-            std::ptr::null_mut(),
+            None,
             // port
             port,
             // priority
@@ -88,9 +96,9 @@ fn construct_instance(
             // properties count
             txt_count,
             // keys
-            keys[..].as_mut_ptr(),
+            keys[..].as_ptr(),
             // values
-            values[..].as_mut_ptr(),
+            values[..].as_ptr(),
         )
     };
     (!ptr.is_null()).then(|| super::ServiceInstance { ptr })
@@ -98,8 +106,8 @@ fn construct_instance(
 
 unsafe extern "system" fn service_register_complete(
     status: u32,
-    ctx: *mut c_void,
-    instance: *mut Dns::DNS_SERVICE_INSTANCE,
+    ctx: *const c_void,
+    instance: *const Dns::DNS_SERVICE_INSTANCE,
 ) {
     let _service = super::ServiceInstance { ptr: instance };
     if status == 0 {
@@ -115,10 +123,10 @@ fn to_windows_str_boxen<'a>(
         .collect()
 }
 
-fn to_windows_str_array_ptr(boxen: &mut [Box<[u16]>]) -> Box<[PWSTR]> {
+fn to_windows_str_array_ptr(boxen: &mut [Box<[u16]>]) -> Box<[PCWSTR]> {
     boxen
-        .iter_mut()
-        .map(|slice| PWSTR(<[u16]>::as_mut_ptr(slice)))
+        .iter()
+        .map(|slice| PCWSTR(<[u16]>::as_ptr(slice)))
         .collect()
 }
 
@@ -136,9 +144,9 @@ impl Drop for RegisterRequest {
         assert!(!self.request.is_null());
         unsafe {
             if self.complete_flag.load(Ordering::Acquire) {
-                Dns::DnsServiceDeRegister(self.request, std::ptr::null_mut());
+                Dns::DnsServiceDeRegister(self.request, None);
             }
-            Box::from_raw(self.request);
+            let _ = Box::from_raw(self.request);
             self.request = std::ptr::null_mut();
         }
     }

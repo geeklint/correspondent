@@ -3,18 +3,19 @@
 
 use std::{future::Future, net::IpAddr, sync::Arc};
 
-#[allow(clippy::unseparated_literal_suffix)]
-#[allow(clippy::unreadable_literal)]
-#[allow(clippy::default_trait_access)]
-#[allow(clippy::semicolon_if_nothing_returned)]
-#[allow(clippy::unwrap_used)]
-mod bindings;
+use windows::Win32::NetworkManagement::Dns;
+
+// #[allow(clippy::unseparated_literal_suffix)]
+// #[allow(clippy::unreadable_literal)]
+// #[allow(clippy::default_trait_access)]
+// #[allow(clippy::semicolon_if_nothing_returned)]
+// #[allow(clippy::unwrap_used)]
+// mod bindings;
 
 mod browse;
 mod register;
 
 use {
-    bindings::Windows::Win32::NetworkManagement::Dns,
     browse::{browse_services, CancelBrowse},
     register::{create_service, RegisterRequest},
 };
@@ -92,7 +93,7 @@ impl<T: CancelType> Drop for CancelToken<T> {
     fn drop(&mut self) {
         if !self.token.reserved.is_null() {
             unsafe {
-                (T::CANCEL_FN)(&mut *self.token);
+                (T::CANCEL_FN)(&*self.token);
             }
             self.token.reserved = std::ptr::null_mut();
         }
@@ -100,11 +101,11 @@ impl<T: CancelType> Drop for CancelToken<T> {
 }
 
 trait CancelType {
-    const CANCEL_FN: unsafe fn(*mut Dns::DNS_SERVICE_CANCEL) -> i32;
+    const CANCEL_FN: unsafe fn(*const Dns::DNS_SERVICE_CANCEL) -> i32;
 }
 
 struct ServiceInstance {
-    ptr: *mut Dns::DNS_SERVICE_INSTANCE,
+    ptr: *const Dns::DNS_SERVICE_INSTANCE,
 }
 
 impl ServiceInstance {

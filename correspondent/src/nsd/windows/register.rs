@@ -9,6 +9,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
+use rand::seq::SliceRandom;
 use windows::{
     core::PCWSTR,
     Win32::{
@@ -73,8 +74,17 @@ fn construct_instance(
     let mut owned_values = to_windows_str_boxen(txt_pairs.iter().map(|p| p.1));
     let keys = to_windows_str_array_ptr(&mut owned_keys);
     let values = to_windows_str_array_ptr(&mut owned_values);
+    let mut rng = rand::thread_rng();
+    let srv_unique: [u16; 10] = std::array::from_fn(|_| {
+        const SYMBOLS: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
+        let ascii = *SYMBOLS
+            .choose(&mut rng)
+            .expect("random selection on a non-empty array will never fail");
+        ascii.into()
+    });
     let service_name = std::ffi::OsStr::new(service_name)
         .encode_wide()
+        .chain(srv_unique)
         .chain(Some(0))
         .collect::<Vec<u16>>();
     let hostname = std::ffi::OsStr::new(hostname)

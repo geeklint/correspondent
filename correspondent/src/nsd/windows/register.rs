@@ -4,14 +4,17 @@
 use std::{
     convert::TryInto,
     ffi::c_void,
-    net::IpAddr,
+    net::{IpAddr, Ipv4Addr},
     os::windows::ffi::OsStrExt,
     sync::atomic::{AtomicBool, Ordering},
 };
 
 use windows::{
     core::PCWSTR,
-    Win32::{Foundation::HANDLE, NetworkManagement::Dns},
+    Win32::{
+        Foundation::{DNS_REQUEST_PENDING, HANDLE},
+        NetworkManagement::Dns,
+    },
 };
 
 pub(super) fn create_service(
@@ -38,19 +41,20 @@ pub(super) fn create_service(
         InterfaceIndex: 0,
         pServiceInstance: service_instance.ptr.cast_mut(),
         pRegisterCompletionCallback: Some(service_register_complete),
-        pQueryContext: complete_flag as *const AtomicBool as *mut c_void,
+        pQueryContext: <*mut _>::cast::<c_void>(complete_flag),
         hCredentials: HANDLE::default(),
         unicastEnabled: false.into(),
     });
     let request = Box::into_raw(request);
     let retcode = unsafe { Dns::DnsServiceRegister(request, None) };
-    if retcode == 9506 {
+    if retcode == (DNS_REQUEST_PENDING as u32) {
         Some(RegisterRequest {
             complete_flag,
             _service_instance: service_instance,
             request,
         })
     } else {
+        tracing::warn!("unexpected result from DnsServiceRegister: {retcode}");
         let _ = unsafe { Box::from_raw(request) };
         None
     }
@@ -104,15 +108,29 @@ fn construct_instance(
     (!ptr.is_null()).then(|| super::ServiceInstance { ptr })
 }
 
+#[tracing::instrument]
 unsafe extern "system" fn service_register_complete(
     status: u32,
     ctx: *const c_void,
     instance: *const Dns::DNS_SERVICE_INSTANCE,
 ) {
-    let _service = super::ServiceInstance { ptr: instance };
+    let service = super::ServiceInstance { ptr: instance };
     if status == 0 {
-        let flag = &*(ctx as *const AtomicBool);
+        let flag = &*(ctx.cast::<AtomicBool>());
         flag.store(true, Ordering::Release);
+        if let Some(s) = service.get() {
+            let mut ip = Ipv4Addr::UNSPECIFIED;
+            let dbg_name = s.pszInstanceName.display();
+            if !s.ip4Address.is_null() {
+                ip = Ipv4Addr::from((*s.ip4Address).to_be());
+            }
+            let port = s.wPort;
+            tracing::info!(
+                "registered dns-sd service {dbg_name} => {ip}:{port}"
+            );
+        }
+    } else {
+        tracing::warn!("non-zero status registering service: {status}");
     }
 }
 

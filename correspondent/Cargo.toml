@@ -22,6 +22,7 @@ rustls-pemfile = "2.1.1"
 socket2 = "0.5.6"
 time = "0.3.14"
 tokio = { version = "1.0", features = ["full"] }
+tracing = "0.1.40"
 webpki = "0.22"
 x509-parser = "0.16.0"
 
@@ -34,3 +35,6 @@ windows = { version = "0.56.0", features = [
     "Win32_NetworkManagement_Dns",
 ]}
 gethostname = "0.4.3"
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3.0", default-features = false, features = ["env-filter", "fmt", "ansi", "time", "local-time"] }

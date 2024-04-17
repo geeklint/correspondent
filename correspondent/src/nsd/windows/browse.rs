@@ -10,7 +10,10 @@ use std::{
     sync::Arc,
 };
 
-use windows::{core::PCWSTR, Win32::NetworkManagement::Dns};
+use windows::{
+    core::PCWSTR,
+    Win32::{Foundation::DNS_REQUEST_PENDING, NetworkManagement::Dns},
+};
 
 pub(super) fn browse_services<T, Found, FoundFut>(
     identity: Arc<crate::socket::Identity<T>>,
@@ -54,7 +57,8 @@ where
     let mut cancel_token = super::CancelToken::<CancelBrowse>::default();
     let retcode =
         unsafe { Dns::DnsServiceBrowse(&request, cancel_token.as_ptr()) };
-    if retcode != 9506 {
+    if retcode != DNS_REQUEST_PENDING {
+        tracing::warn!("unexpected result from DnsServiceBrowse: {retcode}");
         return None;
     }
     Some(cancel_token)
@@ -91,6 +95,7 @@ impl Drop for RecordList {
     }
 }
 
+#[tracing::instrument]
 unsafe extern "system" fn service_browse_callback(
     status: u32,
     ctx: *const c_void,
@@ -98,12 +103,17 @@ unsafe extern "system" fn service_browse_callback(
 ) {
     let _guard = RecordList { ptr: records };
     if status != 0 {
+        tracing::warn!("non-zero status while browsing services: {status}");
         return;
     }
-    let mut current = records;
-    while !current.is_null() {
+    let mut next = records;
+    let mut current;
+    while {
+        current = next;
+        !current.is_null()
+    } {
+        next = (*current).pNext;
         if (*current).wType != Dns::DNS_TYPE_SRV.0 {
-            current = (*current).pNext;
             continue;
         }
         let resolve_request = Dns::DNS_SERVICE_RESOLVE_REQUEST {
@@ -118,13 +128,13 @@ unsafe extern "system" fn service_browse_callback(
             Dns::DnsServiceResolve(&resolve_request, cancel_token.as_ptr());
         #[allow(clippy::mem_forget)]
         std::mem::forget(cancel_token);
-        if retcode != 9506 {
-            //eprintln!("failed to request resolve: {}", retcode);
+        if retcode != DNS_REQUEST_PENDING {
+            tracing::warn!("failed to request resolve: {retcode}");
         }
-        current = (*current).pNext;
     }
 }
 
+#[tracing::instrument]
 unsafe extern "system" fn service_resolve_callback(
     status: u32,
     ctx: *const c_void,
@@ -132,6 +142,7 @@ unsafe extern "system" fn service_resolve_callback(
 ) {
     let instance = super::ServiceInstance { ptr: instance };
     if status != 0 {
+        tracing::warn!("non-zero status resolving service: {status}");
         return;
     }
     let ctx = &*ctx.cast::<Arc<dyn BrowsingContext>>();
@@ -168,6 +179,7 @@ where
             IpAddr::V6(Ipv6Addr::from((*instance.ip6Address).IP6Byte))
         });
         if instance.pszHostName.is_null() {
+            tracing::warn!("dns service instance hostname was null");
             return;
         }
         let host = super::utf16_null_to_string(instance.pszHostName.0);

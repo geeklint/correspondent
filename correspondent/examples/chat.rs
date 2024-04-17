@@ -65,6 +65,12 @@ fn show_prompt(process_id: u32) {
 
 #[tokio::main]
 async fn main() {
+    tracing::subscriber::set_global_default(
+        tracing_subscriber::FmtSubscriber::builder()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .finish(),
+    )
+    .unwrap();
     // Create the certificate signing callback from the debug-cert files
     let ca_key = rcgen::KeyPair::try_from(CA_KEY_PK8).unwrap();
     let params = rcgen::CertificateParams::from_ca_cert_pem(CA_CERT).unwrap();

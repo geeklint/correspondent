@@ -97,6 +97,8 @@ pub(crate) async fn start_peer<T: IdentityCanonicalizer>(
                 identity: peer_instance_id.0,
                 unique: existing_conn.stable_id(),
             };
+            let addr = connection.remote_address();
+            tracing::trace!("close {addr} (duplicate)");
             // this might be vulnerable to a race condition where peers resolve
             // connections in the opposite order and both get closed, but idk
             // if that will happen often enough in practice to matter

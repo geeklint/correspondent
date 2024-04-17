@@ -52,8 +52,11 @@ where
                 socket.discovery_addr,
             )
         });
-        let _cancel_browse =
-            browse_services(Arc::clone(&socket.identity), peer_found);
+        let _cancel_browse = browse_services(
+            Arc::clone(&socket.identity),
+            service_name,
+            peer_found,
+        );
         tokio::spawn(main);
         Some(Self {
             _cancel_browse,

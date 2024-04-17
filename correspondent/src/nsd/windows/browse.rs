@@ -17,6 +17,7 @@ use windows::{
 
 pub(super) fn browse_services<T, Found, FoundFut>(
     identity: Arc<crate::socket::Identity<T>>,
+    service_name_prefix: String,
     peer_found: Found,
 ) -> Option<super::CancelToken<CancelBrowse>>
 where
@@ -31,6 +32,7 @@ where
         Box::new(Arc::new(BrowsingContextGeneric {
             handle: tokio::runtime::Handle::current(),
             identity,
+            service_name_prefix,
             peer_found,
         }));
     let callback = unsafe {
@@ -116,6 +118,13 @@ unsafe extern "system" fn service_browse_callback(
         if (*current).wType != Dns::DNS_TYPE_SRV.0 {
             continue;
         }
+        {
+            let ctx = &*ctx.cast::<Arc<dyn BrowsingContext>>();
+            let service_name = (*current).pName.as_wide();
+            if !ctx.check_interest(service_name) {
+                continue;
+            }
+        }
         let resolve_request = Dns::DNS_SERVICE_RESOLVE_REQUEST {
             Version: Dns::DNS_QUERY_REQUEST_VERSION1.0,
             InterfaceIndex: 0,
@@ -155,10 +164,12 @@ unsafe extern "system" fn service_resolve_callback(
 struct BrowsingContextGeneric<T: crate::IdentityCanonicalizer, Found> {
     handle: tokio::runtime::Handle,
     identity: Arc<crate::socket::Identity<T>>,
+    service_name_prefix: String,
     peer_found: Found,
 }
 
 trait BrowsingContext {
+    fn check_interest(&self, service_name: &[u16]) -> bool;
     unsafe fn do_spawn(self: Arc<Self>, instance: &Dns::DNS_SERVICE_INSTANCE);
 }
 
@@ -171,6 +182,18 @@ where
         + Fn(super::super::FoundPeer<T::Identity>, IpAddr) -> FoundFut,
     FoundFut: Send + Sync + Future<Output = ()>,
 {
+    fn check_interest(&self, service_name: &[u16]) -> bool {
+        let mut prefix_iter = self.service_name_prefix.encode_utf16();
+        let mut srv_name_iter = service_name.iter().copied();
+        loop {
+            match (prefix_iter.next(), srv_name_iter.next()) {
+                (None, _) => return true,
+                (Some(pc), Some(nc)) if pc == nc => continue,
+                _ => return false,
+            }
+        }
+    }
+
     unsafe fn do_spawn(self: Arc<Self>, instance: &Dns::DNS_SERVICE_INSTANCE) {
         let ipv4 = (!instance.ip4Address.is_null()).then(|| {
             IpAddr::V4(Ipv4Addr::from((*instance.ip4Address).to_be()))

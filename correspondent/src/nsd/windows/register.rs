@@ -25,8 +25,22 @@ pub(super) fn create_service(
     port: u16,
     _bind_addr: Option<IpAddr>,
 ) -> Option<RegisterRequest> {
-    let service_name =
-        format!("{}.{}.local", service_name, super::super::SERVICE_TYPE);
+    let mut rng = rand::thread_rng();
+    let srv_unique: [u8; 10] = std::array::from_fn(|_| {
+        const SYMBOLS: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
+        let ascii = *SYMBOLS
+            .choose(&mut rng)
+            .expect("random selection on a non-empty array will never fail");
+        ascii
+    });
+    let srv_unique = std::str::from_utf8(&srv_unique)
+        .expect("ascii can be converted to str");
+    let service_name = format!(
+        "{}{}.{}.local",
+        service_name,
+        srv_unique,
+        super::super::SERVICE_TYPE
+    );
     let mut hostname =
         gethostname::gethostname().to_string_lossy().into_owned();
     hostname.push_str(".local");
@@ -74,17 +88,8 @@ fn construct_instance(
     let mut owned_values = to_windows_str_boxen(txt_pairs.iter().map(|p| p.1));
     let keys = to_windows_str_array_ptr(&mut owned_keys);
     let values = to_windows_str_array_ptr(&mut owned_values);
-    let mut rng = rand::thread_rng();
-    let srv_unique: [u16; 10] = std::array::from_fn(|_| {
-        const SYMBOLS: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
-        let ascii = *SYMBOLS
-            .choose(&mut rng)
-            .expect("random selection on a non-empty array will never fail");
-        ascii.into()
-    });
     let service_name = std::ffi::OsStr::new(service_name)
         .encode_wide()
-        .chain(srv_unique)
         .chain(Some(0))
         .collect::<Vec<u16>>();
     let hostname = std::ffi::OsStr::new(hostname)

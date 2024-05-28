@@ -65,6 +65,7 @@ fn show_prompt(process_id: u32) {
 
 #[tokio::main]
 async fn main() {
+    rustls::crypto::aws_lc_rs::default_provider().install_default();
     tracing::subscriber::set_global_default(
         tracing_subscriber::FmtSubscriber::builder()
             .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -148,7 +149,8 @@ fn read_from_stdin(
             tokio::spawn(async move {
                 let mut stream = conn.open_uni().await.ok()?;
                 stream.write_all(line.as_bytes()).await.ok()?;
-                stream.finish().await.ok()?;
+                stream.finish().ok()?;
+                stream.stopped().await.ok()?;
                 Some(())
             });
         }

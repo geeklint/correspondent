@@ -2,23 +2,28 @@
 /* Copyright © 2021 Violet Leonard */
 
 use std::{
+    convert::TryFrom,
     future::Future,
     io,
     net::{IpAddr, SocketAddr, UdpSocket},
     sync::Arc,
 };
 
-use quinn::{ClientConfig, EndpointConfig, ServerConfig};
+use quinn::{
+    crypto::rustls::{QuicClientConfig, QuicServerConfig},
+    rustls::pki_types::{CertificateDer, PrivateKeyDer},
+    ClientConfig, EndpointConfig, ServerConfig,
+};
 
 use crate::{application::IdentityCanonicalizer, socket::Identity};
 
 /// Required information correspondent uses to verify the identity of peers
 pub struct SocketCertificate {
     /// Private key the socket to be created should use.
-    pub priv_key: rustls::PrivateKey,
+    pub priv_key: PrivateKeyDer<'static>,
 
     /// The certificate chain the socket to be created should advertize.
-    pub chain: Vec<rustls::Certificate>,
+    pub chain: Vec<CertificateDer<'static>>,
 
     /// The authority certificates peers must be signed by to be trusted.
     pub authority: rustls::RootCertStore,
@@ -33,14 +38,14 @@ impl SocketCertificate {
         chain_pem: String,
         authority_pem: String,
     ) -> std::io::Result<Self> {
-        let priv_key = rustls::PrivateKey(priv_key_der);
+        let priv_key = PrivateKeyDer::try_from(priv_key_der)
+            .map_err(std::io::Error::other)?;
         let chain = rustls_pemfile::certs(&mut chain_pem.as_bytes())
-            .map(|r| r.map(|cert| rustls::Certificate(cert.to_vec())))
             .collect::<Result<_, _>>()?;
         let mut authority = rustls::RootCertStore::empty();
         for cert in rustls_pemfile::certs(&mut authority_pem.as_bytes()) {
             let cert = cert?;
-            let _ = authority.add(&rustls::Certificate(cert.to_vec()));
+            let _ = authority.add(cert);
         }
         Ok(Self {
             priv_key,
@@ -51,7 +56,7 @@ impl SocketCertificate {
 
     /// Get the DER-formatted version of the private key
     pub fn serialize_private_key_der(&self) -> &[u8] {
-        &self.priv_key.0
+        self.priv_key.secret_der()
     }
 
     /// Get the PEM-formatted version of the certificate chain
@@ -60,7 +65,7 @@ impl SocketCertificate {
         for cert in &self.chain {
             chain_pem += &pem::encode(&pem::Pem::new(
                 "CERTIFICATE".to_string(),
-                cert.0.clone(),
+                &cert[..],
             ));
         }
         chain_pem
@@ -294,22 +299,30 @@ impl<Id, SN, US, EC>
         rustls::Error,
     > {
         let client_crypto = rustls::ClientConfig::builder()
-            .with_safe_defaults()
+            //.with_safe_default_protocol_versions()
             .with_root_certificates(cert.authority.clone())
             .with_client_auth_cert(
                 cert.chain.clone(),
-                cert.priv_key.clone(),
+                cert.priv_key.clone_key(),
             )?;
         let server_crypto = rustls::ServerConfig::builder()
-            .with_safe_defaults()
-            .with_client_cert_verifier(Arc::new(
-                rustls::server::AllowAnyAuthenticatedClient::new(
+            //.with_safe_default_protocol_versions()
+            .with_client_cert_verifier(
+                rustls::server::WebPkiClientVerifier::builder(Arc::new(
                     cert.authority,
-                ),
-            ))
+                ))
+                .build()
+                .map_err(|e| rustls::OtherError(Arc::new(e)))?,
+            )
             .with_single_cert(cert.chain, cert.priv_key)?;
-        let client_cfg = ClientConfig::new(Arc::new(client_crypto));
-        let server_cfg = ServerConfig::with_crypto(Arc::new(server_crypto));
+        let client_cfg = ClientConfig::new(Arc::new(
+            QuicClientConfig::try_from(client_crypto)
+                .expect("our crypto settings should be correct"),
+        ));
+        let server_cfg = ServerConfig::with_crypto(Arc::new(
+            QuicServerConfig::try_from(server_crypto)
+                .expect("our crypto settings should be correct"),
+        ));
         Ok(SocketBuilder {
             identity: self.identity,
             service_name: self.service_name,

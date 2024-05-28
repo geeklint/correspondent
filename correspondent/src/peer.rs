@@ -5,7 +5,7 @@ use std::{convert::TryFrom, future::Future, sync::Arc, time::Duration};
 
 use {
     futures_util::StreamExt,
-    quinn::{Connecting, Connection},
+    quinn::{rustls::pki_types::CertificateDer, Connecting, Connection},
     tokio::time::timeout,
 };
 
@@ -169,10 +169,10 @@ fn verify_peer(
 ) -> Option<PeerVerified> {
     let chain = connection
         .peer_identity()?
-        .downcast::<Vec<rustls::Certificate>>()
+        .downcast::<Vec<CertificateDer>>()
         .ok()?;
     let cert = chain.iter().next()?;
-    let pki_cert = webpki::EndEntityCert::try_from(&cert.0[..]).ok()?;
+    let pki_cert = webpki::EndEntityCert::try_from(&cert[..]).ok()?;
     let pki_name = webpki::DnsNameRef::try_from_ascii_str(hostname)
         .expect("Application::identity_to_dns returned invalid DNS name");
     pki_cert.verify_is_valid_for_dns_name(pki_name).ok()?;

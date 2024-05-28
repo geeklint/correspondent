@@ -83,8 +83,12 @@ impl<T: IdentityCanonicalizer> Socket<T> {
         let incoming = futures_util::stream::unfold(
             endpoint.clone(),
             |endpoint| async move {
-                let connecting = endpoint.accept().await?;
-                Some((connecting, endpoint))
+                loop {
+                    let incoming = endpoint.accept().await?;
+                    if let Ok(connecting) = incoming.accept() {
+                        return Some((connecting, endpoint));
+                    }
+                }
             },
         );
         events.streams.push(
